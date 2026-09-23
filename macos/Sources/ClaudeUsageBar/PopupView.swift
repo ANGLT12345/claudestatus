@@ -62,16 +62,16 @@ struct PopupView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Claude")
+            Text(model.provider.name)
                 .font(.system(size: 17, weight: .bold))
             let plan = Fmt.plan(model.plan)
             if !plan.isEmpty {
                 Text(plan)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: Status.claude))
+                    .foregroundStyle(Color(nsColor: Status.accent(model.provider)))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(Capsule().fill(Color(nsColor: Status.claude).opacity(dark ? 0.22 : 0.14)))
+                    .background(Capsule().fill(Color(nsColor: Status.accent(model.provider)).opacity(dark ? 0.22 : 0.14)))
             }
             Spacer()
             Button(action: actions.refresh) {
@@ -98,11 +98,11 @@ struct PopupView: View {
         func window(_ kind: RowKind, _ title: String, _ sub: String, _ w: UsageWindow?, _ length: TimeInterval) -> RowModel {
             RowModel(kind: kind, title: title, subtitle: sub, percent: w?.percent,
                      detail: w.map { Fmt.reset($0.resetsAt, now: now) } ?? "",
-                     pace: w.flatMap { Fmt.elapsed($0.resetsAt, length: length, now: now) })
+                     pace: w.flatMap { Fmt.elapsed($0.resetsAt, length: $0.length ?? length, now: now) })
         }
         var rows = [
-            window(.session, "Session", "5-hour rolling window", d?.fiveHour, Fmt.fiveHours),
-            window(.weekly, "Weekly", "All models", d?.sevenDay, Fmt.sevenDays),
+            window(.session, "Session", Fmt.describe(d?.fiveHour?.length ?? Fmt.fiveHours), d?.fiveHour, Fmt.fiveHours),
+            window(.weekly, "Weekly", model.provider == .chatgpt ? "Codex · all models" : "All models", d?.sevenDay, Fmt.sevenDays),
         ]
         if let s = d?.sevenDaySonnet { rows.append(window(.sonnet, "Sonnet", "Weekly · Sonnet only", s, Fmt.sevenDays)) }
         if let o = d?.sevenDayOpus { rows.append(window(.opus, "Opus", "Weekly · Opus only", o, Fmt.sevenDays)) }
@@ -217,7 +217,7 @@ private struct UsageBar: View {
     }
 }
 
-/// Walks the user through signing in to Claude Code (or allowing Keychain access).
+/// Walks the user through signing in to Claude Code or Codex (or allowing Keychain access).
 private struct SetupCard: View {
     @ObservedObject var model: Model
     let action: () -> Void
@@ -233,9 +233,9 @@ private struct SetupCard: View {
                     HStack(spacing: 10) {
                         Text("\(item.offset + 1)")
                             .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(Color(nsColor: Status.claude))
+                            .foregroundStyle(accent)
                             .frame(width: 18, height: 18)
-                            .background(Circle().fill(Color(nsColor: Status.claude).opacity(0.2)))
+                            .background(Circle().fill(accent.opacity(0.2)))
                         item.element
                             .font(.system(size: 12.5))
                             .foregroundStyle(.secondary)
@@ -251,7 +251,7 @@ private struct SetupCard: View {
                     .padding(.vertical, 3)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color(nsColor: Status.claude))
+            .tint(accent)
             .controlSize(.large)
             .padding(.top, 14)
         }
@@ -260,19 +260,22 @@ private struct SetupCard: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
     }
 
+    private var accent: Color { Color(nsColor: Status.accent(model.provider)) }
+    private var cliName: String { model.provider == .chatgpt ? "Codex" : "Claude Code" }
+
     private var title: String {
         switch model.status {
         case .keychainDenied: return "Allow Keychain access"
         case .unauthorized: return "Sign in again"
-        default: return "Connect Claude Code"
+        default: return "Connect \(cliName)"
         }
     }
 
     private var subtitle: String {
         switch model.status {
         case .keychainDenied: return "Claude Code keeps your login in the macOS Keychain. The app needs permission to read it."
-        case .unauthorized: return "Your Claude Code login has expired."
-        default: return "Usage comes from your Claude Code login."
+        case .unauthorized: return "Your \(cliName) login has expired."
+        default: return "Usage comes from your \(cliName) login."
         }
     }
 
@@ -286,6 +289,13 @@ private struct SetupCard: View {
                 Text("Click ") + Text("Try again").bold() + Text(" below"),
                 Text("Enter your Mac password if asked"),
                 Text("Choose ") + Text("Always Allow").bold(),
+            ]
+        }
+        if model.provider == .chatgpt {
+            return [
+                model.cliInstalled ? Text("Run ") + code("codex login") + Text(" in Terminal") : Text("Install Codex (button below)"),
+                model.cliInstalled ? Text("Sign in with your ChatGPT account") : Text("Run ") + code("codex login") + Text(" in Terminal"),
+                Text("Finish in the browser — this updates itself"),
             ]
         }
         if !model.cliInstalled {
@@ -304,7 +314,7 @@ private struct SetupCard: View {
 
     private var buttonTitle: String {
         if model.status == .keychainDenied { return "Try again" }
-        if !model.cliInstalled { return "Install Claude Code" }
+        if !model.cliInstalled { return "Install \(cliName)" }
         return model.status == .unauthorized ? "Open Terminal to sign in" : "Open Terminal"
     }
 

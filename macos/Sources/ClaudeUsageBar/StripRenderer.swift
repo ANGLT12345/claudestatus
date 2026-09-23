@@ -2,7 +2,7 @@ import AppKit
 
 /// Draws the menu bar item: two rows (5h, 7d) in one of four sizes, sized to the menu bar's height.
 enum StripRenderer {
-    static func image(size: StripSize, data: UsageSnapshot?, status: String, stale: Bool, dark: Bool, height: CGFloat, now: Date) -> NSImage {
+    static func image(size: StripSize, provider: Provider, data: UsageSnapshot?, status: String, stale: Bool, dark: Bool, height: CGFloat, now: Date) -> NSImage {
         let width: CGFloat
         switch size {
         case .full: width = 122
@@ -20,13 +20,14 @@ enum StripRenderer {
             }
             guard let data else {
                 // No numbers yet: say why instead of showing empty meters.
-                let lines = size == .full ? ("Claude usage", status) : ("Claude", status.components(separatedBy: " ").first ?? status)
+                let lines = size == .full ? ("\(provider.name) usage", status) : (provider.name, status.components(separatedBy: " ").first ?? status)
                 text(lines.0, x: 2, cy: cy - gap, color: fg, weight: .semibold)
                 text(lines.1, x: 2, cy: cy + gap, color: fg.withAlphaComponent(0.6), weight: .regular)
                 return true
             }
-            row("5h", data.fiveHour, cy: cy - gap, size: size, fg: fg, dark: dark, stale: stale, now: now)
-            row("7d", data.sevenDay, cy: cy + gap, size: size, fg: fg, dark: dark, stale: stale, now: now)
+            // Row labels come from the windows' lengths, so they stay right if a provider's windows differ.
+            row(Fmt.label(data.fiveHour, fallback: "5h"), data.fiveHour, cy: cy - gap, size: size, fg: fg, dark: dark, stale: stale, now: now)
+            row(Fmt.label(data.sevenDay, fallback: "7d"), data.sevenDay, cy: cy + gap, size: size, fg: fg, dark: dark, stale: stale, now: now)
             return true
         }
         image.isTemplate = false

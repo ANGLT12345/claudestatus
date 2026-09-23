@@ -53,4 +53,27 @@ static class Settings
             catch { }
         }
     }
+
+    /// <summary>Whose usage to show: Claude (default) or ChatGPT.</summary>
+    public static Provider Provider
+    {
+        get
+        {
+            try
+            {
+                using var k = Registry.CurrentUser.OpenSubKey(Key);
+                return Enum.TryParse<Provider>(k?.GetValue("Provider") as string, out var v) ? v : Provider.Claude;
+            }
+            catch { return Provider.Claude; }
+        }
+        set
+        {
+            try
+            {
+                using var k = Registry.CurrentUser.CreateSubKey(Key);
+                k.SetValue("Provider", value.ToString());
+            }
+            catch { }
+        }
+    }
 }
