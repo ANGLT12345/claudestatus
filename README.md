@@ -4,7 +4,9 @@
 
 Your Claude plan limits, live in the **Windows taskbar** or the **macOS menu bar**. See how much of your **5-hour session** and **weekly** limit you've used without opening Claude. Click for the full breakdown.
 
-**Jump to:** [Windows setup](#windows-setup) · [macOS setup](#macos) · [Privacy](PRIVACY.md)
+Use ChatGPT or Gemini instead? The app can show those limits too. Claude is the default. See [ChatGPT](#chatgpt) and [Gemini](#gemini).
+
+**Jump to:** [Windows setup](#windows-setup) · [macOS setup](#macos) · [ChatGPT](#chatgpt) · [Gemini](#gemini) · [Privacy](PRIVACY.md)
 
 ![Taskbar sizes](docs/strip-sizes-dark.png)
 
@@ -129,7 +131,7 @@ The app opens at login automatically. You can turn that off with right-click →
 ### Using it on macOS
 
 - **Click** the menu bar item for the details popover. Press ⌘R in the popover to refresh.
-- **Right-click** (or Control-click) for the menu: Show Details, Refresh Now, Size, Open at Login and Quit.
+- **Right-click** (or Control-click) for the menu: Show Details, Refresh Now, Show Usage For (Claude / ChatGPT / Gemini), Size, Open at Login and Quit.
 - **Size.** macOS doesn't let apps see how much menu bar space is free, so there's no Auto size. The default is **Compact**. If the item disappears behind the notch on a MacBook, switch to **Mini** or **Micro**.
 - **Updating to a new version:** after replacing the app, macOS may ask for Keychain access again. Click **Always Allow** again.
 
@@ -144,12 +146,44 @@ bash macos/build.sh
 open macos/build/ClaudeUsageBar.app
 ```
 
+## ChatGPT
+
+The app shows one service at a time, Claude by default. To switch, right-click it and choose **Show usage for → ChatGPT** (or **Gemini**, or back to **Claude**). Your choice is remembered.
+
+For ChatGPT it shows the **Codex usage limits** of your ChatGPT plan (Plus, Pro, Business…): a 5-hour window and a weekly window, the same numbers Codex's `/status` shows. ChatGPT doesn't publish message limits for the chat app itself, so those can't be shown.
+
+It reads your ChatGPT login from [Codex CLI](https://developers.openai.com/codex/cli), so sign in there once:
+
+```bash
+npm install -g @openai/codex     # or on macOS: brew install --cask codex
+codex login
+```
+
+Choose **Sign in with ChatGPT** and finish in your browser. If you aren't signed in, clicking the widget shows a setup card with an **Open terminal** button that runs `codex login` for you. Codex keeps the login in `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`). The app only reads it.
+
+If the widget later says **Sign in**, your Codex login has expired: run `codex` or `codex login` once to renew it.
+
+## Gemini
+
+Choose **Show usage for → Gemini** to see your Gemini daily request quotas: one row for the Pro models and one for the Flash models (the busiest model of each), with the time they reset. On the taskbar the rows are labelled **P** and **F**.
+
+It reads your Google login from [Gemini CLI](https://github.com/google-gemini/gemini-cli), so sign in there once:
+
+```bash
+npm install -g @google/gemini-cli     # or on macOS: brew install gemini-cli
+gemini
+```
+
+Choose **Login with Google** and finish in your browser. Logging in with a Gemini API key isn't supported, because API keys have no quota to read. If your account needs a Google Cloud project, set `GOOGLE_CLOUD_PROJECT` as you would for Gemini CLI.
+
+**Good to know:** Gemini CLI's login only lasts about an hour, and only Gemini CLI can renew it. The app never renews or changes it. So if you haven't used Gemini CLI for a while, the widget says **Sign in**. Run `gemini` for a moment (the setup card's **Open terminal** button does this) and it updates by itself.
+
 ## Using it
 
 | Action | What it does |
 | --- | --- |
 | **Left-click** | Opens the details popup (Esc or clicking elsewhere closes it) |
-| **Right-click** | Menu: Show details, Refresh now, Size, Start with Windows, Quit |
+| **Right-click** | Menu: Show details, Refresh now, Show usage for (Claude / ChatGPT / Gemini), Size, Start with Windows, Quit |
 | **F5** in the popup | Refreshes now |
 
 **Sizes.** Auto picks one for you. To pin a size, right-click and choose **Size**.
@@ -165,18 +199,18 @@ On a centred taskbar it prefers the empty space left of your apps, next to Widge
 
 ## Troubleshooting
 
-- **"Set up" / "Sign in" on the taskbar.** No valid Claude Code login was found. Do step 1 above, or click the widget and use **Open terminal**.
-- **"Rate limited".** Anthropic's usage endpoint limits how often it can be called. The widget waits for the time the server asks for and then retries.
+- **"Set up" / "Sign in" on the taskbar.** No valid Claude Code login was found (or Codex login for ChatGPT, or Gemini CLI login for Gemini). Do step 1 above (or the [ChatGPT](#chatgpt) or [Gemini](#gemini) setup), or click the widget and use **Open terminal**.
+- **"Rate limited".** The usage endpoints limit how often they can be called. The widget waits for the time the server asks for and then retries.
 - **The widget disappeared after Explorer restarted.** It re-attaches automatically within a second or two. If it doesn't, restart the app.
 - **Custom Claude config folder.** If you set `CLAUDE_CONFIG_DIR`, the widget uses it too.
 
 ## Security & privacy
 
-- **No telemetry.** The app makes one kind of network request: `GET https://api.anthropic.com/api/oauth/usage`, the same endpoint behind Claude Code's `/usage` command. It's undocumented and could change.
-- **Your login token stays put.** It's read from Claude Code's `~/.claude/.credentials.json` and sent only to that address, over HTTPS. Redirects are refused, so the token can never be forwarded to another host. The app never copies the token, logs it, caches it or displays it, and never writes to your credentials file.
-- **What's stored.** Only the last usage numbers (percentages and reset times, no token) and your settings. On Windows these are in `%LOCALAPPDATA%\ClaudeUsageBar\last.json` and `HKCU\Software\ClaudeUsageBar`, plus the optional autostart entry in `HKCU\...\Run`. On macOS they're in `~/Library/Application Support/ClaudeUsageBar/last.json` and the app's preferences. No admin rights are needed.
+- **No telemetry.** The app makes one kind of network request: `GET https://api.anthropic.com/api/oauth/usage`, the same endpoint behind Claude Code's `/usage` command. When showing ChatGPT it instead calls `GET https://chatgpt.com/backend-api/wham/usage`, the endpoint behind Codex's `/status`. For Gemini it calls `POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` and `:retrieveUserQuota`, the endpoints Gemini CLI uses. All of these are undocumented and could change.
+- **Your login token stays put.** It's read from Claude Code's `~/.claude/.credentials.json` (or Codex's `~/.codex/auth.json` for ChatGPT, or Gemini CLI's `~/.gemini/oauth_creds.json` for Gemini) and sent only to that service's address, over HTTPS. Redirects are refused, so the token can never be forwarded to another host. The app never copies the token, logs it, caches it or displays it, and never writes to your credentials file.
+- **What's stored.** Only the last usage numbers (percentages and reset times, no token) and your settings. On Windows these are in `%LOCALAPPDATA%\ClaudeUsageBar\last.json` (`last-chatgpt.json` and `last-gemini.json` for the others) and `HKCU\Software\ClaudeUsageBar`, plus the optional autostart entry in `HKCU\...\Run`. On macOS they're in `~/Library/Application Support/ClaudeUsageBar/last.json` and the app's preferences. No admin rights are needed.
 - **macOS Keychain.** On a Mac the token is read from the Keychain item "Claude Code-credentials", only after you allow it. It is kept in memory and never written anywhere.
-- **What it runs.** Only when you click **Open terminal** in the setup card, it launches `claude` from an absolute PATH entry or from `%USERPROFILE%\.local\bin`.
+- **What it runs.** Only when you click **Open terminal** in the setup card, it launches `claude` (or `codex login`, or `gemini`) from an absolute PATH entry or from `%USERPROFILE%\.local\bin` (or `%APPDATA%\npm` for Codex and Gemini CLI).
 - **No third-party packages.** It uses only .NET and Windows APIs.
 - **Verifiable releases.** Release builds are produced by [GitHub Actions](.github/workflows/release.yml) from the tagged source, with a `.sha256` checksum next to the exe. To check a download:
   ```powershell
@@ -218,4 +252,4 @@ git push origin v1.0.0
 ```
 ---
 
-Not affiliated with or endorsed by Anthropic. "Claude" is a trademark of Anthropic.
+Not affiliated with or endorsed by Anthropic, OpenAI or Google. "Claude" is a trademark of Anthropic. "ChatGPT" and "Codex" are trademarks of OpenAI. "Gemini" is a trademark of Google.

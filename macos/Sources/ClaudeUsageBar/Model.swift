@@ -4,6 +4,7 @@ import SwiftUI
 /// Everything the menu bar item and popover need to draw themselves.
 @MainActor
 final class Model: ObservableObject {
+    @Published var provider: Provider = .current
     @Published var data: UsageSnapshot?
     @Published var plan: String?
     @Published var status: FetchStatus = .none
@@ -47,4 +48,15 @@ enum Status {
     }
 
     static let claude = NSColor(srgbRed: 0.85, green: 0.47, blue: 0.34, alpha: 1)
+    static let chatgpt = NSColor(srgbRed: 0.06, green: 0.64, blue: 0.50, alpha: 1)
+    static let gemini = NSColor(srgbRed: 0.26, green: 0.52, blue: 0.96, alpha: 1)
+
+    /// The provider's brand colour, for buttons, badges and step numbers.
+    static func accent(_ p: Provider) -> NSColor {
+        switch p {
+        case .claude: return claude
+        case .chatgpt: return chatgpt
+        case .gemini: return gemini
+        }
+    }
 }

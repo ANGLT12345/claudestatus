@@ -10,6 +10,24 @@ sealed class Palette
     public required Color BgTop, BgBottom, Border, Text, Sub, Muted, Track, Divider, Hover, Pressed;
     public required Color Green, Amber, Red;
     public static readonly Color Claude = Color.FromArgb(217, 119, 87);
+    public static readonly Color ChatGpt = Color.FromArgb(16, 163, 127);
+    public static readonly Color Gemini = Color.FromArgb(66, 133, 244);
+
+    /// <summary>The provider's brand colour, for buttons, badges and step numbers.</summary>
+    public static Color Accent(Provider p) => p switch
+    {
+        Provider.ChatGpt => ChatGpt,
+        Provider.Gemini => Gemini,
+        _ => Claude,
+    };
+
+    /// <summary>Accent readable as text on the popup background.</summary>
+    public Color AccentText(Provider p) => p switch
+    {
+        Provider.ChatGpt => Light ? Color.FromArgb(13, 122, 95) : Color.FromArgb(86, 212, 168),
+        Provider.Gemini => Light ? Color.FromArgb(26, 95, 200) : Color.FromArgb(138, 180, 248),
+        _ => Light ? Color.FromArgb(180, 83, 50) : Color.FromArgb(240, 150, 118),
+    };
 
     public Color Status(double pct) => pct >= 90 ? Red : pct >= 70 ? Amber : Green;
 

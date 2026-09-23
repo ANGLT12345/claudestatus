@@ -51,24 +51,27 @@ static class StripPainter
             // No numbers yet: say why instead of showing empty meters.
             using var small = Gfx.Ui(11 * s);
             float x = (variant == StripSize.Full ? 10 : 7) * s;
-            Gfx.TextMid(g, variant == StripSize.Full ? "Claude usage" : "Claude", label, fg, x, cy - rowGap);
+            string name = UsageClient.Name(vs.Provider);
+            Gfx.TextMid(g, variant == StripSize.Full ? name + " usage" : name, label, fg, x, cy - rowGap);
             Gfx.TextMid(g, Status(vs, now, variant == StripSize.Full), small, Gfx.A(fg, 150), x, cy + rowGap);
             return;
         }
 
+        // Row labels come from the windows' lengths, so they stay right if a provider's windows differ.
+        string top = Fmt.Label(d.FiveHour, "5h"), bottom = Fmt.Label(d.SevenDay, "7d");
         switch (variant)
         {
             case StripSize.Compact:
-                Compact(ctx, "5h", d.FiveHour, cy - rowGap, label);
-                Compact(ctx, "7d", d.SevenDay, cy + rowGap, label);
+                Compact(ctx, top, d.FiveHour, cy - rowGap, label);
+                Compact(ctx, bottom, d.SevenDay, cy + rowGap, label);
                 break;
             case StripSize.Mini:
-                Mini(ctx, "5h", d.FiveHour, cy - rowGap, label);
-                Mini(ctx, "7d", d.SevenDay, cy + rowGap, label);
+                Mini(ctx, top, d.FiveHour, cy - rowGap, label);
+                Mini(ctx, bottom, d.SevenDay, cy + rowGap, label);
                 break;
             default:
-                Full(ctx, "5h", d.FiveHour, cy - rowGap, label);
-                Full(ctx, "7d", d.SevenDay, cy + rowGap, label);
+                Full(ctx, top, d.FiveHour, cy - rowGap, label);
+                Full(ctx, bottom, d.SevenDay, cy + rowGap, label);
                 break;
         }
     }

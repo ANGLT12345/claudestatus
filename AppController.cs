@@ -8,7 +8,7 @@ sealed class AppController : ApplicationContext
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunName = "ClaudeUsageBar";
 
     readonly ViewState _vs = new() { PollInterval = Poll };
-    readonly UsageClient _client = new();
+    UsageClient _client = UsageClient.For(Settings.Provider);
     readonly StripWindow _strip;
     readonly PopupForm _popup;
     readonly ContextMenuStrip _menu;
@@ -21,11 +21,7 @@ sealed class AppController : ApplicationContext
 
     public AppController()
     {
-        var (cached, plan) = UsageClient.LoadCache();
-        _vs.Data = cached;
-        _vs.Plan = plan;
-        var now = DateTimeOffset.Now;
-        _nextPoll = cached is not null && now - cached.FetchedAt < Poll ? cached.FetchedAt + Poll : now;
+        LoadProvider();
 
         _popup = new PopupForm(_vs);
         _popup.RefreshRequested += () => _ = Fetch(manual: true);
@@ -44,6 +40,33 @@ sealed class AppController : ApplicationContext
 
         _tick.Tick += (_, _) => Tick();
         _tick.Start();
+        Tick();
+    }
+
+    /// <summary>Resets the view to the current provider, starting from its last cached numbers.</summary>
+    void LoadProvider()
+    {
+        var (cached, plan) = _client.LoadCache();
+        _vs.Provider = _client.Provider;
+        _vs.Data = cached;
+        _vs.Plan = plan;
+        _vs.Status = FetchStatus.None;
+        _vs.Message = null;
+        _vs.NextAttempt = null;
+        _vs.Fetching = false;
+        _vs.CliInstalled = true;
+        _failures = 0;
+        var now = DateTimeOffset.Now;
+        _nextPoll = cached is not null && now - cached.FetchedAt < Poll ? cached.FetchedAt + Poll : now;
+    }
+
+    void SwitchProvider(Provider p)
+    {
+        if (p == _client.Provider) return;
+        Settings.Provider = p;
+        _client = UsageClient.For(p);
+        LoadProvider();
+        Push();
         Tick();
     }
 
@@ -68,7 +91,10 @@ sealed class AppController : ApplicationContext
         _vs.Fetching = true;
         Push();
 
-        var r = await _client.FetchAsync();
+        var client = _client;
+        var r = await client.FetchAsync();
+        // The provider was switched while this was in flight: its answer is for the other one.
+        if (client != _client) return;
         now = DateTimeOffset.Now;
         _vs.Fetching = false;
         _vs.Status = r.Status;
@@ -90,7 +116,7 @@ sealed class AppController : ApplicationContext
             case FetchStatus.NoCredentials:
             case FetchStatus.Unauthorized:
                 // Only re-reads the local credentials file until it changes, so checking often is cheap.
-                _vs.CliInstalled = UsageClient.FindCli() is not null;
+                _vs.CliInstalled = _client.FindCli() is not null;
                 _nextPoll = now + TimeSpan.FromSeconds(10);
                 break;
             default:
@@ -137,6 +163,7 @@ sealed class AppController : ApplicationContext
         m.Items.Add(new ToolStripMenuItem("Show details", null, (_, _) => TogglePopup()) { Font = new Font("Segoe UI Semibold", 9.5f) });
         m.Items.Add(new ToolStripMenuItem("Refresh now", null, (_, _) => _ = Fetch(manual: true)));
         m.Items.Add(new ToolStripSeparator());
+        m.Items.Add(BuildProviderMenu());
         m.Items.Add(BuildSizeMenu());
         m.Items.Add(_startupItem);
         m.Items.Add(new ToolStripSeparator());
@@ -146,28 +173,36 @@ sealed class AppController : ApplicationContext
         return m;
     }
 
-    ToolStripMenuItem BuildSizeMenu()
-    {
-        var menu = new ToolStripMenuItem("Size");
-        (StripSize size, string label)[] options =
+    ToolStripMenuItem BuildProviderMenu() => BuildChoiceMenu("Show usage for",
+        Enum.GetValues<Provider>().Select(p => (p, UsageClient.Name(p))).ToArray(),
+        () => _client.Provider, SwitchProvider);
+
+    ToolStripMenuItem BuildSizeMenu() => BuildChoiceMenu("Size",
+        new[]
         {
             (StripSize.Auto, "Auto (fit available space)"),
             (StripSize.Full, "Full"),
             (StripSize.Compact, "Compact"),
             (StripSize.Mini, "Mini"),
             (StripSize.Micro, "Micro"),
-        };
-        foreach (var (size, label) in options)
+        },
+        () => Settings.Size, size => { Settings.Size = size; _strip.Relayout(); });
+
+    /// <summary>A submenu of options with a check next to the current one, styled like the main menu.</summary>
+    ToolStripMenuItem BuildChoiceMenu<T>(string title, (T value, string label)[] options, Func<T> current, Action<T> choose)
+    {
+        var menu = new ToolStripMenuItem(title);
+        foreach (var (value, label) in options)
         {
             var item = new ToolStripMenuItem(label) { Padding = new Padding(4, 5, 12, 5) };
-            item.Click += (_, _) => { Settings.Size = size; _strip.Relayout(); };
+            item.Click += (_, _) => choose(value);
             menu.DropDownItems.Add(item);
         }
         menu.DropDownOpening += (_, _) =>
         {
-            var current = Settings.Size;
+            var now = current();
             for (int i = 0; i < options.Length; i++)
-                ((ToolStripMenuItem)menu.DropDownItems[i]).Checked = options[i].size == current;
+                ((ToolStripMenuItem)menu.DropDownItems[i]).Checked = EqualityComparer<T>.Default.Equals(options[i].value, now);
             if (menu.DropDown is ToolStripDropDownMenu dd) { dd.ShowImageMargin = false; dd.ShowCheckMargin = true; }
             menu.DropDown.Renderer = _menu.Renderer;
             menu.DropDown.BackColor = _menu.BackColor;
@@ -178,20 +213,31 @@ sealed class AppController : ApplicationContext
         return menu;
     }
 
-    /// <summary>Opens a terminal running Claude Code so the user can /login, or the install guide if it's missing.</summary>
+    /// <summary>
+    /// Opens a terminal to sign in (Claude Code for /login, `codex login` for ChatGPT, `gemini` for Gemini),
+    /// or the CLI's install guide if it's missing.
+    /// </summary>
     void OpenSetup()
     {
-        var cli = UsageClient.FindCli();
+        var cli = _client.FindCli();
         _vs.CliInstalled = cli is not null;
         _popup.HidePopup();
+        bool chatGpt = _client.Provider == Provider.ChatGpt;
         if (cli is null)
         {
-            Launch("https://docs.claude.com/en/docs/claude-code/setup", null);
+            Launch(_client.Provider switch
+            {
+                Provider.ChatGpt => "https://developers.openai.com/codex/cli",
+                Provider.Gemini => "https://github.com/google-gemini/gemini-cli",
+                _ => "https://docs.claude.com/en/docs/claude-code/setup",
+            }, null);
             return;
         }
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!Launch("wt.exe", $"-d \"{home}\" cmd /k \"{cli}\"", home))
-            Launch("cmd.exe", $"/k \"{cli}\"", home);
+        // cmd /k strips the outer quotes of its command line, so the whole command is wrapped once more.
+        var command = chatGpt ? $"\"\"{cli}\" login\"" : $"\"{cli}\"";
+        if (!Launch("wt.exe", $"-d \"{home}\" cmd /k {command}", home))
+            Launch("cmd.exe", $"/k {command}", home);
     }
 
     static bool Launch(string file, string? args, string? dir = null)
