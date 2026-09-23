@@ -6,8 +6,11 @@ using System.Text.Json;
 
 namespace ClaudeUsageBar;
 
-/// <summary>One usage limit. Length is the window's duration (5 hours, 7 days), used for labels and the pace marker.</summary>
-public sealed record UsageWindow(double Percent, DateTimeOffset? ResetsAt, TimeSpan? Length = null);
+/// <summary>
+/// One usage limit. Length is the window's duration (5 hours, 7 days), used for labels and the pace marker.
+/// Label, when set, replaces the length-based label on the taskbar (Gemini's "P" and "F").
+/// </summary>
+public sealed record UsageWindow(double Percent, DateTimeOffset? ResetsAt, TimeSpan? Length = null, string? Label = null);
 public sealed record ExtraUsage(bool Enabled, double? LimitUsd, double? UsedUsd, double? Percent);
 
 public sealed class UsageSnapshot
@@ -56,6 +59,33 @@ public sealed class UsageSnapshot
         return new UsageWindow(Math.Clamp(pct.Value, 0, 100), reset, length);
     }
 
+    /// <summary>
+    /// Gemini's quota response: a daily request bucket per model, with remainingFraction and resetTime.
+    /// The busiest Pro model goes in the session slot and the busiest Flash model in the weekly slot.
+    /// </summary>
+    public static UsageSnapshot ParseGemini(JsonElement root, DateTimeOffset fetchedAt)
+    {
+        UsageWindow? pro = null, flash = null;
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("buckets", out var buckets) && buckets.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var b in buckets.EnumerateArray())
+            {
+                if (b.ValueKind != JsonValueKind.Object || Num(b, "remainingFraction") is not { } left) continue;
+                string model = b.TryGetProperty("modelId", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString()!.ToLowerInvariant() : "";
+                DateTimeOffset? reset = null;
+                if (b.TryGetProperty("resetTime", out var r) && r.ValueKind == JsonValueKind.String &&
+                    DateTimeOffset.TryParse(r.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
+                    reset = parsed;
+                double used = Math.Clamp((1 - left) * 100, 0, 100);
+                if (model.Contains("pro") && (pro is null || used > pro.Percent))
+                    pro = new UsageWindow(used, reset, TimeSpan.FromDays(1), "P");
+                else if (model.Contains("flash") && (flash is null || used > flash.Percent))
+                    flash = new UsageWindow(used, reset, TimeSpan.FromDays(1), "F");
+            }
+        }
+        return new() { FiveHour = pro, SevenDay = flash, FetchedAt = fetchedAt };
+    }
+
     static UsageWindow? Window(JsonElement root, string name, TimeSpan length)
     {
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(name, out var w) || w.ValueKind != JsonValueKind.Object)
@@ -88,8 +118,8 @@ public enum FetchStatus { None, Ok, NoCredentials, Unauthorized, RateLimited, Er
 
 public sealed record FetchResult(FetchStatus Status, UsageSnapshot? Data, string? Plan, string? Message = null, TimeSpan? RetryAfter = null);
 
-/// <summary>Whose plan usage the app shows. Picked from the right-click menu.</summary>
-public enum Provider { Claude, ChatGpt }
+/// <summary>Whose plan usage the app shows. Picked from the right-click menu; Claude is the default.</summary>
+public enum Provider { Claude, ChatGpt, Gemini }
 
 /// <summary>
 /// Fetches plan usage with a CLI's own login token (Claude Code or Codex). Subclasses say where the token lives,
@@ -105,7 +135,27 @@ public abstract class UsageClient
     };
     string? _rejectedToken;
 
-    public static UsageClient For(Provider p) => p == Provider.ChatGpt ? new ChatGptClient() : new ClaudeClient();
+    public static UsageClient For(Provider p) => p switch
+    {
+        Provider.ChatGpt => new ChatGptClient(),
+        Provider.Gemini => new GeminiClient(),
+        _ => new ClaudeClient(),
+    };
+
+    public static string Name(Provider p) => p switch
+    {
+        Provider.ChatGpt => "ChatGPT",
+        Provider.Gemini => "Gemini",
+        _ => "Claude",
+    };
+
+    /// <summary>The CLI whose login the usage comes from.</summary>
+    public static string CliName(Provider p) => p switch
+    {
+        Provider.ChatGpt => "Codex",
+        Provider.Gemini => "Gemini CLI",
+        _ => "Claude Code",
+    };
 
     public abstract Provider Provider { get; }
     /// <summary>Host the token is sent to, for error messages.</summary>
@@ -117,11 +167,24 @@ public abstract class UsageClient
     protected abstract string[] CliDirs { get; }
     protected abstract (string? token, string? plan, string? account) ReadCredentials();
     protected abstract HttpRequestMessage Request(string token, string? account);
+    /// <summary>Sends the usage request. Overridden when it takes more than one call.</summary>
+    protected virtual Task<HttpResponseMessage> Send(string token, string? account) => SendRequest(Request(token, account));
+    /// <summary>True when the credentials say the token has expired, so it isn't worth sending.</summary>
+    protected virtual bool TokenExpired() => false;
     protected abstract UsageSnapshot Parse(JsonElement root, DateTimeOffset fetchedAt);
     /// <summary>Plan named in the usage response, when the credentials don't say.</summary>
     protected virtual string? PlanFrom(JsonElement root) => null;
 
     protected static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    protected static async Task<HttpResponseMessage> SendRequest(HttpRequestMessage req)
+    {
+        using (req)
+        {
+            req.Headers.UserAgent.ParseAdd("ClaudeUsageBar/1.0");
+            return await Http.SendAsync(req);
+        }
+    }
 
     /// <summary>Path to the provider's CLI, or null if it isn't installed.</summary>
     public string? FindCli()
@@ -148,14 +211,12 @@ public abstract class UsageClient
         if (string.IsNullOrEmpty(token))
             return new(FetchStatus.NoCredentials, null, plan, "Not signed in");
         // Don't keep hitting the API with a token it already rejected; wait until the CLI writes a new one.
-        if (token == _rejectedToken)
+        if (token == _rejectedToken || TokenExpired())
             return new(FetchStatus.Unauthorized, null, plan, "Login expired");
 
         try
         {
-            using var req = Request(token, account);
-            req.Headers.UserAgent.ParseAdd("ClaudeUsageBar/1.0");
-            using var res = await Http.SendAsync(req);
+            using var res = await Send(token, account);
             var body = await res.Content.ReadAsStringAsync();
 
             if (res.StatusCode == HttpStatusCode.TooManyRequests)
@@ -182,6 +243,7 @@ public abstract class UsageClient
         catch (TaskCanceledException) { return new(FetchStatus.Error, null, plan, "Request timed out"); }
         catch (HttpRequestException) { return new(FetchStatus.Error, null, plan, $"Can't reach {Host}"); }
         catch (JsonException) { return new(FetchStatus.Error, null, plan, "Unexpected response"); }
+        catch (SetupException e) { return new(FetchStatus.Error, null, plan, e.Message); }
         catch (Exception) { return new(FetchStatus.Error, null, plan, "Couldn't update"); }
     }
 
@@ -209,6 +271,9 @@ public abstract class UsageClient
         catch { return (null, ReadCredentials().plan); }
     }
 }
+
+/// <summary>The account can't report usage (e.g. Gemini without a Code Assist project); the message says why.</summary>
+public sealed class SetupException(string message) : Exception(message);
 
 /// <summary>Talks to the same endpoint Claude Code's /usage uses, with Claude Code's own OAuth token.</summary>
 public sealed class ClaudeClient : UsageClient
@@ -300,6 +365,93 @@ public sealed class ChatGptClient : UsageClient
     protected override UsageSnapshot Parse(JsonElement root, DateTimeOffset fetchedAt) => UsageSnapshot.ParseChatGpt(root, fetchedAt);
 }
 
+/// <summary>
+/// Talks to the Code Assist endpoints Gemini CLI uses for its quota, with the Google login Gemini CLI keeps in
+/// ~/.gemini/oauth_creds.json. Gemini's limits are daily request quotas per model.
+/// That access token only lasts about an hour and only Gemini CLI renews it, so the app asks you to run
+/// Gemini CLI again once it has expired.
+/// </summary>
+public sealed class GeminiClient : UsageClient
+{
+    const string Base = "https://cloudcode-pa.googleapis.com/v1internal:";
+    string? _project, _tier;
+    long? _expiry;
+
+    public override Provider Provider => Provider.Gemini;
+    protected override string Host => "cloudcode-pa.googleapis.com";
+    protected override string Company => "Google";
+    protected override string CacheFile => "last-gemini.json";
+    protected override string[] CliNames => new[] { "gemini.exe", "gemini.cmd" };
+    protected override string[] CliDirs => new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm"),
+        Path.Combine(Home, ".local", "bin"),
+    };
+
+    static string CredsPath => Path.Combine(Home, ".gemini", "oauth_creds.json");
+
+    protected override (string? token, string? plan, string? account) ReadCredentials()
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(CredsPath));
+            var root = doc.RootElement;
+            string? token = root.TryGetProperty("access_token", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : null;
+            // expiry_date is in milliseconds since the Unix epoch.
+            _expiry = root.TryGetProperty("expiry_date", out var e) && e.ValueKind == JsonValueKind.Number ? (long)e.GetDouble() : null;
+            return (token, _tier, null);
+        }
+        catch { return (null, _tier, null); }
+    }
+
+    protected override bool TokenExpired() =>
+        _expiry is { } ms && DateTimeOffset.FromUnixTimeMilliseconds(ms) < DateTimeOffset.UtcNow.AddMinutes(1);
+
+    static HttpRequestMessage Post(string method, string token, object body)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, Base + method)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return req;
+    }
+
+    protected override HttpRequestMessage Request(string token, string? account) =>
+        Post("retrieveUserQuota", token, new { project = _project });
+
+    /// <summary>Looks up the account's Code Assist project and tier once, then asks for its quota.</summary>
+    protected override async Task<HttpResponseMessage> Send(string token, string? account)
+    {
+        if (_project is null)
+        {
+            var env = Environment.GetEnvironmentVariable("GOOGLE_CLOUD_PROJECT");
+            var res = await SendRequest(Post("loadCodeAssist", token, new
+            {
+                cloudaicompanionProject = string.IsNullOrEmpty(env) ? null : env,
+                metadata = new { ideType = "IDE_UNSPECIFIED", platform = "PLATFORM_UNSPECIFIED", pluginType = "GEMINI", duetProject = string.IsNullOrEmpty(env) ? null : env },
+            }));
+            if (!res.IsSuccessStatusCode) return res;
+            using (res)
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+                var root = doc.RootElement;
+                _project = root.TryGetProperty("cloudaicompanionProject", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString()
+                    : string.IsNullOrEmpty(env) ? null : env;
+                if (root.TryGetProperty("currentTier", out var t) && t.ValueKind == JsonValueKind.Object &&
+                    t.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                    _tier = id.GetString(); // "free-tier", "standard-tier"; Fmt.Plan names them
+            }
+            if (_project is null) throw new SetupException("Gemini isn't set up for this account");
+        }
+        return await SendRequest(Request(token, account));
+    }
+
+    protected override string? PlanFrom(JsonElement root) => _tier;
+
+    protected override UsageSnapshot Parse(JsonElement root, DateTimeOffset fetchedAt) => UsageSnapshot.ParseGemini(root, fetchedAt);
+}
+
 /// <summary>Everything the UI needs to draw itself.</summary>
 public sealed class ViewState
 {
@@ -355,6 +507,9 @@ static class Fmt
         null or "" => "",
         "pro" => "Pro",
         "plus" => "Plus",
+        "free-tier" => "Free",
+        "standard-tier" => "Standard",
+        "legacy-tier" => "Legacy",
         "max" => "Max",
         "team" => "Team",
         "enterprise" => "Enterprise",
@@ -362,12 +517,12 @@ static class Fmt
     };
 
     /// <summary>Short strip label for a window: "5h", "7d". Falls back when the length is unknown.</summary>
-    public static string Label(UsageWindow? w, string fallback) => w?.Length switch
+    public static string Label(UsageWindow? w, string fallback) => w?.Label ?? (w?.Length switch
     {
         { TotalDays: >= 1 } l => $"{Math.Round(l.TotalDays):0}d",
         { TotalHours: >= 1 } l => $"{Math.Round(l.TotalHours):0}h",
         _ => fallback,
-    };
+    });
 
     /// <summary>"5-hour rolling window", "Weekly window": describes a window by its length.</summary>
     public static string Describe(TimeSpan? length, string fallback) => length switch

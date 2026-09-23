@@ -15,6 +15,12 @@ static class PopupPainter
     {
         var d = vs.Data;
         bool chatGpt = vs.Provider == Provider.ChatGpt;
+        if (vs.Provider == Provider.Gemini)
+            return new List<RowModel>
+            {
+                Window(RowKind.Opus, "Pro models", "Daily requests", d?.FiveHour, TimeSpan.FromDays(1), now),
+                Window(RowKind.Sonnet, "Flash models", "Daily requests", d?.SevenDay, TimeSpan.FromDays(1), now),
+            };
         var rows = new List<RowModel>
         {
             Window(RowKind.Session, "Session", Fmt.Describe(d?.FiveHour?.Length ?? Fmt.FiveHours, ""), d?.FiveHour, Fmt.FiveHours, now),
@@ -94,7 +100,7 @@ static class PopupPainter
         float cy = 31 * s;
         using var title = Gfx.Display(17 * s, FontStyle.Bold);
         float tx = Pad * s;
-        string name = vs.Provider == Provider.ChatGpt ? "ChatGPT" : "Claude";
+        string name = UsageClient.Name(vs.Provider);
         Gfx.TextMid(g, name, title, p.Text, tx, cy);
         float tw = Gfx.Measure(g, name, title).Width;
 
@@ -232,12 +238,12 @@ static class PopupPainter
         g.FillPath(b, path);
     }
 
-    /// <summary>Walks the user through signing in to Claude Code (or Codex, for ChatGPT), which is where the usage token comes from.</summary>
+    /// <summary>Walks the user through signing in to Claude Code (Codex for ChatGPT, Gemini CLI for Gemini), which is where the usage token comes from.</summary>
     static void Setup(Graphics g, float s, Palette p, ViewState vs, float y, RectangleF button, bool hover)
     {
         bool expired = vs.Status == FetchStatus.Unauthorized;
         bool chatGpt = vs.Provider == Provider.ChatGpt;
-        string cliName = chatGpt ? "Codex" : "Claude Code";
+        string cliName = UsageClient.CliName(vs.Provider);
         var card = new RectangleF(Pad * s, y, (W - Pad * 2) * s, (SetupH - 12) * s);
         Gfx.FillRound(g, Gfx.Mix(p.BgTop, p.Text, p.Light ? 0.03f : 0.035f), card, 12 * s);
         using (var pen = new Pen(p.Divider, Math.Max(1, s)))
@@ -250,7 +256,18 @@ static class PopupPainter
         Gfx.TextMid(g, expired ? "Sign in again" : $"Connect {cliName}", title, p.Text, x, y + 24 * s);
         Gfx.TextMid(g, expired ? $"Your {cliName} login has expired." : $"Usage comes from your {cliName} login.", sub, p.Sub, x, y + 44 * s);
 
-        var steps = chatGpt
+        var steps = vs.Provider == Provider.Gemini
+            ? new[]
+            {
+                vs.CliInstalled
+                    ? new (string, bool)[] { ("Run ", false), ("gemini", true), (" in a terminal", false) }
+                    : new (string, bool)[] { ("Install Gemini CLI (button below)", false) },
+                expired
+                    ? new (string, bool)[] { ("That renews the login automatically", false) }
+                    : new (string, bool)[] { ("Choose ", false), ("Login with Google", false) },
+                new (string, bool)[] { (expired ? "Keep it open a moment — this updates itself" : "Finish in the browser — this updates itself", false) },
+            }
+            : chatGpt
             ? vs.CliInstalled
                 ? new[]
                 {

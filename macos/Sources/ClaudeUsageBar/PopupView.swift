@@ -100,6 +100,12 @@ struct PopupView: View {
                      detail: w.map { Fmt.reset($0.resetsAt, now: now) } ?? "",
                      pace: w.flatMap { Fmt.elapsed($0.resetsAt, length: $0.length ?? length, now: now) })
         }
+        if model.provider == .gemini {
+            return [
+                window(.opus, "Pro models", "Daily requests", d?.fiveHour, 86400),
+                window(.sonnet, "Flash models", "Daily requests", d?.sevenDay, 86400),
+            ]
+        }
         var rows = [
             window(.session, "Session", Fmt.describe(d?.fiveHour?.length ?? Fmt.fiveHours), d?.fiveHour, Fmt.fiveHours),
             window(.weekly, "Weekly", model.provider == .chatgpt ? "Codex · all models" : "All models", d?.sevenDay, Fmt.sevenDays),
@@ -217,7 +223,7 @@ private struct UsageBar: View {
     }
 }
 
-/// Walks the user through signing in to Claude Code or Codex (or allowing Keychain access).
+/// Walks the user through signing in to Claude Code, Codex or Gemini CLI (or allowing Keychain access).
 private struct SetupCard: View {
     @ObservedObject var model: Model
     let action: () -> Void
@@ -261,7 +267,7 @@ private struct SetupCard: View {
     }
 
     private var accent: Color { Color(nsColor: Status.accent(model.provider)) }
-    private var cliName: String { model.provider == .chatgpt ? "Codex" : "Claude Code" }
+    private var cliName: String { model.provider.cliName }
 
     private var title: String {
         switch model.status {
@@ -289,6 +295,14 @@ private struct SetupCard: View {
                 Text("Click ") + Text("Try again").bold() + Text(" below"),
                 Text("Enter your Mac password if asked"),
                 Text("Choose ") + Text("Always Allow").bold(),
+            ]
+        }
+        if model.provider == .gemini {
+            let expired = model.status == .unauthorized
+            return [
+                model.cliInstalled ? Text("Run ") + code("gemini") + Text(" in Terminal") : Text("Install Gemini CLI (button below)"),
+                expired ? Text("That renews the login automatically") : Text("Choose ") + Text("Login with Google").bold(),
+                Text(expired ? "Keep it open a moment — this updates itself" : "Finish in the browser — this updates itself"),
             ]
         }
         if model.provider == .chatgpt {
