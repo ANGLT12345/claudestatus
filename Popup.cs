@@ -14,10 +14,11 @@ static class PopupPainter
     public static List<RowModel> Rows(ViewState vs, DateTimeOffset now)
     {
         var d = vs.Data;
+        bool chatGpt = vs.Provider == Provider.ChatGpt;
         var rows = new List<RowModel>
         {
-            Window(RowKind.Session, "Session", "5-hour rolling window", d?.FiveHour, Fmt.FiveHours, now),
-            Window(RowKind.Weekly, "Weekly", "All models", d?.SevenDay, Fmt.SevenDays, now),
+            Window(RowKind.Session, "Session", Fmt.Describe(d?.FiveHour?.Length ?? Fmt.FiveHours, ""), d?.FiveHour, Fmt.FiveHours, now),
+            Window(RowKind.Weekly, "Weekly", chatGpt ? "Codex · all models" : "All models", d?.SevenDay, Fmt.SevenDays, now),
         };
         if (d?.SevenDaySonnet is { } son) rows.Add(Window(RowKind.Sonnet, "Sonnet", "Weekly · Sonnet only", son, Fmt.SevenDays, now));
         if (d?.SevenDayOpus is { } opus) rows.Add(Window(RowKind.Opus, "Opus", "Weekly · Opus only", opus, Fmt.SevenDays, now));
@@ -30,7 +31,7 @@ static class PopupPainter
     }
 
     static RowModel Window(RowKind k, string title, string sub, UsageWindow? w, TimeSpan length, DateTimeOffset now) =>
-        new(k, title, sub, w?.Percent, w is null ? "" : Fmt.Reset(w.ResetsAt, now), w is null ? null : Fmt.Elapsed(w.ResetsAt, length, now));
+        new(k, title, sub, w?.Percent, w is null ? "" : Fmt.Reset(w.ResetsAt, now), w is null ? null : Fmt.Elapsed(w.ResetsAt, w.Length ?? length, now));
 
     public const float SetupH = 212;
 
@@ -93,8 +94,9 @@ static class PopupPainter
         float cy = 31 * s;
         using var title = Gfx.Display(17 * s, FontStyle.Bold);
         float tx = Pad * s;
-        Gfx.TextMid(g, "Claude", title, p.Text, tx, cy);
-        float tw = Gfx.Measure(g, "Claude", title).Width;
+        string name = vs.Provider == Provider.ChatGpt ? "ChatGPT" : "Claude";
+        Gfx.TextMid(g, name, title, p.Text, tx, cy);
+        float tw = Gfx.Measure(g, name, title).Width;
 
         string plan = Fmt.Plan(vs.Plan);
         if (plan.Length > 0)
@@ -102,8 +104,8 @@ static class PopupPainter
             using var pf = Gfx.Semibold(10.5f * s);
             float pw = Gfx.Measure(g, plan, pf).Width + 14 * s;
             var pill = new RectangleF(tx + tw + 9 * s, cy - 9.5f * s, pw, 19 * s);
-            Gfx.FillRound(g, Gfx.A(Palette.Claude, p.Light ? 30 : 42), pill, 9.5f * s);
-            Gfx.TextMid(g, plan, pf, p.Light ? Color.FromArgb(180, 83, 50) : Color.FromArgb(240, 150, 118), pill.X + pill.Width / 2, cy, 0.5f);
+            Gfx.FillRound(g, Gfx.A(Palette.Accent(vs.Provider), p.Light ? 30 : 42), pill, 9.5f * s);
+            Gfx.TextMid(g, plan, pf, p.AccentText(vs.Provider), pill.X + pill.Width / 2, cy, 0.5f);
         }
 
         var btn = RefreshButton(s);
@@ -230,10 +232,12 @@ static class PopupPainter
         g.FillPath(b, path);
     }
 
-    /// <summary>Walks the user through signing in to Claude Code, which is where the usage token comes from.</summary>
+    /// <summary>Walks the user through signing in to Claude Code (or Codex, for ChatGPT), which is where the usage token comes from.</summary>
     static void Setup(Graphics g, float s, Palette p, ViewState vs, float y, RectangleF button, bool hover)
     {
         bool expired = vs.Status == FetchStatus.Unauthorized;
+        bool chatGpt = vs.Provider == Provider.ChatGpt;
+        string cliName = chatGpt ? "Codex" : "Claude Code";
         var card = new RectangleF(Pad * s, y, (W - Pad * 2) * s, (SetupH - 12) * s);
         Gfx.FillRound(g, Gfx.Mix(p.BgTop, p.Text, p.Light ? 0.03f : 0.035f), card, 12 * s);
         using (var pen = new Pen(p.Divider, Math.Max(1, s)))
@@ -243,10 +247,24 @@ static class PopupPainter
         float x = card.X + 16 * s;
         using var title = Gfx.Semibold(14.5f * s);
         using var sub = Gfx.Ui(12 * s);
-        Gfx.TextMid(g, expired ? "Sign in again" : "Connect Claude Code", title, p.Text, x, y + 24 * s);
-        Gfx.TextMid(g, expired ? "Your Claude Code login has expired." : "Usage comes from your Claude Code login.", sub, p.Sub, x, y + 44 * s);
+        Gfx.TextMid(g, expired ? "Sign in again" : $"Connect {cliName}", title, p.Text, x, y + 24 * s);
+        Gfx.TextMid(g, expired ? $"Your {cliName} login has expired." : $"Usage comes from your {cliName} login.", sub, p.Sub, x, y + 44 * s);
 
-        var steps = vs.CliInstalled
+        var steps = chatGpt
+            ? vs.CliInstalled
+                ? new[]
+                {
+                    new (string, bool)[] { ("Run ", false), ("codex login", true), (" in a terminal", false) },
+                    new (string, bool)[] { ("Sign in with your ChatGPT account", false) },
+                    new (string, bool)[] { ("Finish in the browser — this updates itself", false) },
+                }
+                : new[]
+                {
+                    new (string, bool)[] { ("Install Codex (button below)", false) },
+                    new (string, bool)[] { ("Run ", false), ("codex login", true), (" in a terminal", false) },
+                    new (string, bool)[] { ("Finish in the browser — this updates itself", false) },
+                }
+            : vs.CliInstalled
             ? new[]
             {
                 new (string, bool)[] { ("Run ", false), ("claude", true), (" in a terminal", false) },
@@ -263,12 +281,13 @@ static class PopupPainter
         using var num = Gfx.Semibold(10.5f * s);
         using var body = Gfx.Ui(12.5f * s);
         using var code = new Font(CodeFamily, 11.5f * s, FontStyle.Regular, GraphicsUnit.Pixel);
-        var accent = p.Light ? Color.FromArgb(180, 83, 50) : Color.FromArgb(240, 150, 118);
+        var brand = Palette.Accent(vs.Provider);
+        var accent = p.AccentText(vs.Provider);
         for (int i = 0; i < steps.Length; i++)
         {
             float cy = y + (76 + i * 25) * s;
             float r = 9 * s;
-            using (var b = new SolidBrush(Gfx.A(Palette.Claude, p.Light ? 34 : 48)))
+            using (var b = new SolidBrush(Gfx.A(brand, p.Light ? 34 : 48)))
                 g.FillEllipse(b, x, cy - r, r * 2, r * 2);
             Gfx.TextMid(g, (i + 1).ToString(), num, accent, x + r, cy, 0.5f);
 
@@ -290,9 +309,9 @@ static class PopupPainter
             }
         }
 
-        var fill = hover ? Gfx.Mix(Palette.Claude, Color.White, 0.12f) : Palette.Claude;
+        var fill = hover ? Gfx.Mix(brand, Color.White, 0.12f) : brand;
         Gfx.FillRound(g, fill, button, 8 * s);
-        string label = vs.CliInstalled ? (expired ? "Open terminal to sign in" : "Open terminal") : "Install Claude Code";
+        string label = vs.CliInstalled ? (expired ? "Open terminal to sign in" : "Open terminal") : $"Install {cliName}";
         using var bf = Gfx.Semibold(13 * s);
         using var icon = Gfx.Icon(13 * s);
         string glyph = vs.CliInstalled ? "" : ""; // CommandPrompt / Download

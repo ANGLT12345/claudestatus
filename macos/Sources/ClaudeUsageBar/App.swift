@@ -18,7 +18,7 @@ enum Main {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = Model()
-    private let client = UsageClient()
+    private var client = UsageClient(provider: .current)
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var timer: Timer?
@@ -30,13 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var appearanceObservation: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let cached = Cache.load() {
-            model.data = cached.data
-            model.plan = cached.plan
-            if Date().timeIntervalSince(cached.data.fetchedAt) < model.pollInterval {
-                nextPoll = cached.data.fetchedAt.addingTimeInterval(model.pollInterval)
-            }
-        }
+        loadProvider()
         LoginItem.applyDefault()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -45,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.action = #selector(statusItemClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.imagePosition = .imageOnly
-            button.setAccessibilityLabel("Claude usage")
+            button.setAccessibilityLabel("\(model.provider.name) usage")
             appearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
                 Task { @MainActor in self?.render() }
             }
@@ -68,6 +62,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        render()
+        tick()
+    }
+
+    // MARK: Provider
+
+    /// Resets the model to the current provider, starting from its last cached numbers.
+    private func loadProvider() {
+        let cached = Cache.load(client.provider)
+        model.provider = client.provider
+        model.data = cached?.data
+        model.plan = cached?.plan
+        model.status = .none
+        model.message = nil
+        model.nextAttempt = nil
+        model.fetching = false
+        model.cliInstalled = true
+        failures = 0
+        nextPoll = Date()
+        if let cached, Date().timeIntervalSince(cached.data.fetchedAt) < model.pollInterval {
+            nextPoll = cached.data.fetchedAt.addingTimeInterval(model.pollInterval)
+        }
+    }
+
+    private func switchProvider(_ provider: Provider) {
+        guard provider != client.provider else { return }
+        Provider.current = provider
+        client = UsageClient(provider: provider)
+        loadProvider()
+        statusItem.button?.setAccessibilityLabel("\(provider.name) usage")
         render()
         tick()
     }
@@ -95,8 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.fetching = true
         if model.status == .keychainDenied { client.reset() }
 
+        let current = client
         Task { @MainActor in
-            let r = await client.fetch()
+            let r = await current.fetch()
+            // The provider was switched while this was in flight: its answer is for the other one.
+            guard current === self.client else { return }
             let now = Date()
             model.fetching = false
             model.status = r.status
@@ -114,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 nextPoll = now.addingTimeInterval(min(max(wait + 5, 60), 1800))
             case .noCredentials, .unauthorized:
                 // Only re-reads local credentials until they change, so checking often is cheap.
-                model.cliInstalled = ClaudeCLI.path != nil
+                model.cliInstalled = CLI.path(for: current.provider) != nil
                 nextPoll = now.addingTimeInterval(10)
             case .keychainDenied:
                 nextPoll = .distantFuture
@@ -135,11 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let now = model.now
         let stale = model.data.map { model.status != .ok && model.status != .none && now.timeIntervalSince($0.fetchedAt) > 1200 } ?? false
         button.image = StripRenderer.image(
-            size: StripSize.current, data: model.data, status: stripStatus(now: now), stale: stale, dark: dark,
+            size: StripSize.current, provider: model.provider, data: model.data, status: stripStatus(now: now), stale: stale, dark: dark,
             height: NSStatusBar.system.thickness, now: now)
         button.toolTip = model.data.map {
             "Session \(Int(($0.fiveHour?.percent ?? 0).rounded()))% · Weekly \(Int(($0.sevenDay?.percent ?? 0).rounded()))%"
-        } ?? "Claude usage"
+        } ?? "\(model.provider.name) usage"
     }
 
     private func stripStatus(now: Date) -> String {
@@ -187,6 +214,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Refresh Now", action: #selector(menuRefresh), keyEquivalent: "r").target = self
         menu.addItem(.separator())
 
+        let providerItem = NSMenuItem(title: "Show Usage For", action: nil, keyEquivalent: "")
+        let providers = NSMenu()
+        for provider in Provider.allCases {
+            let item = NSMenuItem(title: provider.name, action: #selector(menuProvider(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = provider.rawValue
+            item.state = provider == client.provider ? .on : .off
+            providers.addItem(item)
+        }
+        providerItem.submenu = providers
+        menu.addItem(providerItem)
+
         let sizeItem = NSMenuItem(title: "Size", action: nil, keyEquivalent: "")
         let sizes = NSMenu()
         for size in StripSize.allCases {
@@ -216,6 +255,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func menuRefresh() { refresh(manual: true) }
     @objc private func menuLogin() { LoginItem.setEnabled(!LoginItem.isEnabled) }
 
+    @objc private func menuProvider(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let provider = Provider(rawValue: raw) else { return }
+        switchProvider(provider)
+    }
+
     @objc private func menuSize(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let size = StripSize(rawValue: raw) else { return }
         StripSize.current = size
@@ -224,7 +268,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Setup
 
-    /// Opens Terminal running Claude Code so the user can /login, retries the Keychain, or opens the install guide.
+    /// Opens Terminal to sign in (Claude Code for /login, or `codex login` for ChatGPT),
+    /// retries the Keychain, or opens the CLI's install guide.
     private func openSetup() {
         popover.performClose(nil)
         if model.status == .keychainDenied {
@@ -232,38 +277,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             refresh(manual: false)
             return
         }
-        guard let cli = ClaudeCLI.path else {
+        let chatgpt = client.provider == .chatgpt
+        guard let cli = CLI.path(for: client.provider) else {
             model.cliInstalled = false
-            NSWorkspace.shared.open(URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!)
+            NSWorkspace.shared.open(URL(string: chatgpt ? "https://developers.openai.com/codex/cli"
+                                                        : "https://docs.claude.com/en/docs/claude-code/setup")!)
             return
         }
-        ClaudeCLI.openInTerminal(cli)
+        CLI.openInTerminal(cli, arguments: chatgpt ? ["login"] : [])
     }
 }
 
 // MARK: - Helpers
 
-enum ClaudeCLI {
-    /// Common install locations; GUI apps don't inherit the shell's PATH, so we look directly.
-    static var path: String? {
+enum CLI {
+    /// Common install locations of Claude Code or Codex; GUI apps don't inherit the shell's PATH, so we look directly.
+    static func path(for provider: Provider) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
-            "\(home)/.local/bin/claude",
-            "\(home)/.claude/local/claude",
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            "\(home)/.npm-global/bin/claude",
+        let name = provider == .chatgpt ? "codex" : "claude"
+        var candidates = [
+            "\(home)/.local/bin/\(name)",
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            "\(home)/.npm-global/bin/\(name)",
         ]
+        if provider == .claude { candidates.insert("\(home)/.claude/local/claude", at: 1) }
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     /// Writes a tiny .command script and opens it, which runs it in Terminal (no Automation permission needed).
-    static func openInTerminal(_ cli: String) {
+    static func openInTerminal(_ cli: String, arguments: [String] = []) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ClaudeUsageBar", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let script = dir.appendingPathComponent("claude-login.command")
-        let escaped = cli.replacingOccurrences(of: "'", with: "'\\''")
-        let body = "#!/bin/zsh -l\ncd ~\n'\(escaped)'\n"
+        let script = dir.appendingPathComponent("login.command")
+        let quoted = ([cli] + arguments).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let body = "#!/bin/zsh -l\ncd ~\n\(quoted.joined(separator: " "))\n"
         do {
             try body.write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
