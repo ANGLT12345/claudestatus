@@ -12,7 +12,7 @@ static class Native
         WM_MOUSEACTIVATE = 0x0021, WM_SETTINGCHANGE = 0x001A, WM_DPICHANGED = 0x02E0, WM_NCHITTEST = 0x0084;
     public const int MA_NOACTIVATE = 3;
 
-    public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40;
+    public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
     public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
     public const int ULW_ALPHA = 2;

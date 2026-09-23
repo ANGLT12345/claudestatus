@@ -46,6 +46,10 @@ sealed class StripWindow : NativeWindow, IDisposable
             Width = 1, Height = 1,
         };
         try { CreateHandle(cp); } catch { _taskbar = IntPtr.Zero; return; }
+        // New taskbar (first start or Explorer restart): forget the old layout and wait for a fresh scan.
+        _layout = null;
+        _lastScan = default;
+        _attachedAt = DateTime.UtcNow;
         Reposition(force: true);
     }
 
@@ -70,6 +74,13 @@ sealed class StripWindow : NativeWindow, IDisposable
             h = tb.Height;
             int trayLeft = haveTray ? tr.Left : tb.Right - (int)(300 * scale);
             ScanLayoutSoon(trayLeft);
+            // Until the first scan tells us where the icons really are, stay hidden rather than guess
+            // and land on top of them. If scanning never works, fall back after a few seconds.
+            if (_layout is null && (DateTime.UtcNow - _attachedAt).TotalSeconds < 8)
+            {
+                Native.SetWindowPos(Handle, Native.HWND_TOP, 0, 0, 0, 0, Native.SWP_NOACTIVATE | Native.SWP_HIDEWINDOW | Native.SWP_NOMOVE | Native.SWP_NOSIZE);
+                return;
+            }
             (x, variant) = Place(tb, trayLeft, scale);
             w = StripPainter.Width(variant, scale);
             x -= tb.Left;
@@ -99,13 +110,18 @@ sealed class StripWindow : NativeWindow, IDisposable
     }
 
     TaskbarLayout? _layout;
-    DateTime _lastScan;
+    DateTime _lastScan, _attachedAt = DateTime.UtcNow;
     bool _scanning;
+    int _settleScans;
 
-    /// <summary>Refreshes the real button layout in the background every few seconds (UIA is slow-ish and cross-process).</summary>
+    /// <summary>
+    /// Refreshes the real button layout in the background (UIA is slow-ish and cross-process): every 2 s normally,
+    /// and every 0.4 s for a moment after a change, because taskbar icons slide into place over a few hundred ms.
+    /// </summary>
     void ScanLayoutSoon(int trayLeft)
     {
-        if (_scanning || (DateTime.UtcNow - _lastScan).TotalSeconds < 3) return;
+        double interval = _settleScans > 0 ? 0.4 : 2;
+        if (_scanning || (DateTime.UtcNow - _lastScan).TotalSeconds < interval) return;
         _scanning = true;
         var taskbar = _taskbar;
         var ctx = SynchronizationContext.Current;
@@ -116,7 +132,15 @@ sealed class StripWindow : NativeWindow, IDisposable
                 _scanning = false;
                 _lastScan = DateTime.UtcNow;
                 var fresh = t.Result;
-                if (fresh != _layout) { _layout = fresh; Reposition(force: true); }
+                // A failed scan (Explorer busy) keeps the last good layout instead of guessing.
+                if (fresh is null) return;
+                if (fresh != _layout)
+                {
+                    _layout = fresh;
+                    _settleScans = 4;
+                    Reposition(force: true);
+                }
+                else if (_settleScans > 0) _settleScans--;
             }
             if (ctx is null) Apply(); else ctx.Post(_ => Apply(), null);
         });
@@ -136,8 +160,8 @@ sealed class StripWindow : NativeWindow, IDisposable
         int margin = (int)(6 * scale);
         if (_layout is not { } l)
         {
-            // Layout unknown (UIA unavailable): sit left of the tray.
-            var v = PreferredSizes().First();
+            // Layout unknown (UIA unavailable): the smallest size, left of the tray, to cover as little as possible.
+            var v = PreferredSizes().Last();
             return (trayLeft - StripPainter.Width(v, scale) - margin, v);
         }
 
