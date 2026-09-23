@@ -2,7 +2,9 @@
 
 # Claude Usage Bar
 
-Your Claude plan limits, live in the Windows taskbar. See how much of your **5-hour session** and **weekly** limit you've used without opening Claude. Click for the full breakdown.
+Your Claude plan limits, live in the **Windows taskbar** or the **macOS menu bar**. See how much of your **5-hour session** and **weekly** limit you've used without opening Claude. Click for the full breakdown.
+
+**Jump to:** [Windows setup](#windows-setup) · [macOS setup](#macos) · [Privacy](PRIVACY.md)
 
 ![Taskbar sizes](docs/strip-sizes-dark.png)
 
@@ -17,10 +19,10 @@ Your Claude plan limits, live in the Windows taskbar. See how much of your **5-h
 - **Always finds space.** It measures the real taskbar layout and picks the largest of four sizes that fits: **Full → Compact → Mini → Micro**. As you open and close apps, it resizes and moves by itself.
 - **Details popup.** Session, weekly, per-model (Sonnet/Opus) and extra-usage limits, with reset times. A small tick on each bar shows where your usage would be if spread evenly across the window, so you can tell if you're ahead or behind.
 - **Colour coded:** green, then amber at 70%, then red at 90%.
-- **Light and dark** themes that follow Windows.
+- **Light and dark** themes that follow your system.
 - **Light on resources.** It checks every 5 minutes, backs off when rate limited and keeps the last reading so it shows numbers instantly on startup.
 
-## Setup
+## Windows setup
 
 ### 1. Install Claude Code and log in
 
@@ -96,6 +98,52 @@ Some antivirus tools are suspicious of new, unsigned apps, especially ones that 
 
 It starts with Windows automatically from the first launch. To turn that off, right-click the widget and untick **Start with Windows**; it stays off after that. If you move the exe, the startup entry follows it the next time you run it.
 
+## macOS
+
+A native menu bar app for macOS 13 (Ventura) or later, on both Apple Silicon and Intel Macs. It shows the same numbers, popover and colours as the Windows version.
+
+### 1. Install Claude Code and log in
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+claude
+```
+
+Inside Claude Code, type `/login`. Choose **Claude account with subscription** and finish signing in in your browser.
+
+### 2. Install the app
+
+1. Download `ClaudeUsageBar-macOS.zip` from [Releases](../../releases) and double-click it to unzip.
+2. Drag **ClaudeUsageBar.app** into your **Applications** folder.
+3. Open it. The first time, macOS will refuse, because the app isn't notarised by Apple (that needs a paid developer account). To allow it:
+   - **macOS 15 (Sequoia) and later:** click **Done** on the warning. Open **System Settings → Privacy & Security**, scroll down to "ClaudeUsageBar was blocked…", click **Open Anyway** and confirm with your password.
+   - **macOS 13–14:** right-click the app in Applications, choose **Open**, then click **Open** again.
+   - **Or, in Terminal:**
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/ClaudeUsageBar.app
+     ```
+4. **Allow Keychain access.** Claude Code keeps your login in the macOS Keychain, so macOS asks whether ClaudeUsageBar may use "Claude Code-credentials". Enter your Mac password and click **Always Allow**. If you click **Allow** instead, you'll be asked again next time.
+
+The app opens at login automatically. You can turn that off with right-click → **Open at Login**.
+
+### Using it on macOS
+
+- **Click** the menu bar item for the details popover. Press ⌘R in the popover to refresh.
+- **Right-click** (or Control-click) for the menu: Show Details, Refresh Now, Size, Open at Login and Quit.
+- **Size.** macOS doesn't let apps see how much menu bar space is free, so there's no Auto size. The default is **Compact**. If the item disappears behind the notch on a MacBook, switch to **Mini** or **Micro**.
+- **Updating to a new version:** after replacing the app, macOS may ask for Keychain access again. Click **Always Allow** again.
+
+### Build from source (macOS)
+
+Needs the Xcode Command Line Tools (`xcode-select --install`):
+
+```bash
+git clone https://github.com/ANGLT12345/claudestatus.git
+cd claudestatus
+bash macos/build.sh
+open macos/build/ClaudeUsageBar.app
+```
+
 ## Using it
 
 | Action | What it does |
@@ -126,7 +174,8 @@ On a centred taskbar it prefers the empty space left of your apps, next to Widge
 
 - **No telemetry.** The app makes one kind of network request: `GET https://api.anthropic.com/api/oauth/usage`, the same endpoint behind Claude Code's `/usage` command. It's undocumented and could change.
 - **Your login token stays put.** It's read from Claude Code's `~/.claude/.credentials.json` and sent only to that address, over HTTPS. Redirects are refused, so the token can never be forwarded to another host. The app never copies the token, logs it, caches it or displays it, and never writes to your credentials file.
-- **What's stored.** The last usage numbers (percentages and reset times, no token) go in `%LOCALAPPDATA%\ClaudeUsageBar\last.json`. Settings go in `HKCU\Software\ClaudeUsageBar`, and the optional autostart entry in `HKCU\...\Run`. No admin rights are needed.
+- **What's stored.** Only the last usage numbers (percentages and reset times, no token) and your settings. On Windows these are in `%LOCALAPPDATA%\ClaudeUsageBar\last.json` and `HKCU\Software\ClaudeUsageBar`, plus the optional autostart entry in `HKCU\...\Run`. On macOS they're in `~/Library/Application Support/ClaudeUsageBar/last.json` and the app's preferences. No admin rights are needed.
+- **macOS Keychain.** On a Mac the token is read from the Keychain item "Claude Code-credentials", only after you allow it. It is kept in memory and never written anywhere.
 - **What it runs.** Only when you click **Open terminal** in the setup card, it launches `claude` from an absolute PATH entry or from `%USERPROFILE%\.local\bin`.
 - **No third-party packages.** It uses only .NET and Windows APIs.
 - **Verifiable releases.** Release builds are produced by [GitHub Actions](.github/workflows/release.yml) from the tagged source, with a `.sha256` checksum next to the exe. To check a download:
