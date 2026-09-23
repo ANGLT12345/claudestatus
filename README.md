@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="72" align="right" alt="">
+
 # Claude Usage Bar
 
 Your Claude plan limits, live in the Windows taskbar. See how much of your **5-hour session** and **weekly** limit you've used without opening Claude. Click for the full breakdown.
@@ -42,7 +44,9 @@ Inside Claude Code, type `/login`. Choose **Claude account with subscription** (
 
 ### 2. Install the widget
 
-**Option A: download.** Get `ClaudeUsageBar.exe` from [Releases](../../releases) and run it. It needs the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (Windows will prompt you if it's missing).
+**Option A: download.** Get `ClaudeUsageBar.exe` from [Releases](../../releases). Save it somewhere permanent, such as `C:\Users\<you>\Apps\`, because Start with Windows points at wherever the exe is. Then run it.
+
+Because the app is new and isn't code-signed, your browser and Windows will probably warn you the first time. That's expected. See [Getting past download and security warnings](#getting-past-download-and-security-warnings) below.
 
 **Option B: build from source** (needs the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)):
 
@@ -52,6 +56,41 @@ cd claudestatus
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
 .\dist\ClaudeUsageBar.exe
 ```
+
+### Getting past download and security warnings
+
+The exe is new and isn't signed with a paid code-signing certificate, so Windows and browsers don't "know" it yet and warn you. This is normal for small open-source apps, and the warnings get rarer as more people download it. If you'd like to check the file first, compare its checksum with the `.sha256` file on the release page (see [Security & privacy](#security--privacy)), or build it yourself (Option B).
+
+**Microsoft Edge: "ClaudeUsageBar.exe isn't commonly downloaded"**
+1. In the downloads panel, hover over the file and click **⋯** (More actions).
+2. Choose **Keep**.
+3. If a second warning appears, click **Show more** → **Keep anyway**.
+
+**Google Chrome: "Suspicious download" / "This file isn't commonly downloaded"**
+1. In the downloads panel, click the warning, or open `chrome://downloads`.
+2. Choose **Download suspicious file**, or **Keep**.
+
+**Firefox** usually downloads it without asking. If it's blocked, open the downloads list (↓), right-click the file and choose **Allow download**.
+
+**Windows: "Windows protected your PC" (Microsoft Defender SmartScreen)**
+1. Click **More info**.
+2. Click **Run anyway**.
+
+You only need to do this once.
+
+**Alternatively, unblock the file before running it:** right-click `ClaudeUsageBar.exe` → **Properties** → at the bottom of the **General** tab, tick **Unblock** → **OK**.
+
+**"To run this application, you must install .NET"**
+
+The app needs the free .NET 8 Desktop Runtime. Click **Yes**, download the **.NET Desktop Runtime 8 (x64)** installer, run it, then start the app again. Or install it straight from [Microsoft](https://dotnet.microsoft.com/download/dotnet/8.0).
+
+**Smart App Control blocked it with no "Run anyway" option**
+
+Windows 11's Smart App Control blocks unsigned apps and has no per-app exception. Your options are to build from source (Option B), or to turn Smart App Control off in **Windows Security → App & browser control → Smart App Control settings**. Be aware that on current Windows versions it can't be turned back on without resetting Windows.
+
+**Your antivirus flags it**
+
+Some antivirus tools are suspicious of new, unsigned apps, especially ones that read a credentials file. The app only sends your login token to Anthropic; see [Security & privacy](#security--privacy). You can check the checksum, read the source, or build it yourself. If you get a false positive, please [open an issue](../../issues) naming the antivirus product.
 
 ### 3. That's it
 
@@ -108,6 +147,7 @@ On a centred taskbar it prefers the empty space left of your apps, next to Widge
 dotnet build
 dotnet run                               # run it
 dotnet run -- --render docs              # re-render the README screenshots with sample data
+dotnet run -- --icon app.ico             # regenerate the app icon
 ```
 
 | File | Purpose |
@@ -127,18 +167,6 @@ Push a version tag and GitHub Actions builds the exe and attaches it (with its c
 git tag v1.0.0
 git push origin v1.0.0
 ```
-
-### Seeing how many people use it
-
-The app has no telemetry, so use GitHub's own stats:
-
-- **Downloads per release:**
-  ```powershell
-  gh api repos/ANGLT12345/claudestatus/releases --jq '.[] | "\(.tag_name): \([.assets[] | select(.name == "ClaudeUsageBar.exe") | .download_count] | add) downloads"'
-  ```
-- **Visitors and clones** (last 14 days): repo → **Insights → Traffic**.
-- **Stars, forks and watchers** on the repo page.
-
 ---
 
 Not affiliated with or endorsed by Anthropic. "Claude" is a trademark of Anthropic.

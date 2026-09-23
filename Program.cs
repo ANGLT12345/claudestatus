@@ -15,6 +15,11 @@ static class Program
             Preview.Render(args.Length > 1 ? args[1] : ".");
             return 0;
         }
+        if (args.Length > 1 && args[0] == "--icon")
+        {
+            Preview.WriteIco(args[1]);
+            return 0;
+        }
 
         using var mutex = new Mutex(true, @"Local\ClaudeUsageBar.SingleInstance", out bool created);
         if (!created) return 0;
