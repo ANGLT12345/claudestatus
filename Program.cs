@@ -20,6 +20,11 @@ static class Program
             Preview.WriteIco(args[1]);
             return 0;
         }
+        if (args.Length > 1 && args[0] == "--iconset")
+        {
+            Preview.WriteIconset(args[1]);
+            return 0;
+        }
 
         using var mutex = new Mutex(true, @"Local\ClaudeUsageBar.SingleInstance", out bool created);
         if (!created) return 0;

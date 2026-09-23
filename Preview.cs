@@ -48,14 +48,15 @@ static class Preview
     /// Draws the app icon: two usage gauges (like the Micro strip) on a dark rounded square.
     /// Run with --icon &lt;file.ico&gt; to regenerate app.ico.
     /// </summary>
-    public static Bitmap Icon(int n)
+    public static Bitmap Icon(int n, bool mac = false)
     {
         var bmp = new Bitmap(n, n, PixelFormat.Format32bppArgb);
         using var g = Graphics.FromImage(bmp);
         Gfx.Setup(g, clearType: false);
         g.Clear(Color.Transparent);
 
-        float inset = n <= 24 ? 0 : n * 0.04f;
+        // macOS icons sit inside a ~10% margin on the canvas, per Apple's icon grid.
+        float inset = mac ? n * 0.1f : n <= 24 ? 0 : n * 0.04f;
         var tile = new RectangleF(inset, inset, n - inset * 2, n - inset * 2);
         using (var bg = new System.Drawing.Drawing2D.LinearGradientBrush(tile, Color.FromArgb(52, 52, 58), Color.FromArgb(22, 22, 26), 90f))
         using (var path = Gfx.Round(tile, tile.Width * 0.24f))
@@ -110,6 +111,18 @@ static class Preview
             offset += images[i].Length;
         }
         foreach (var img in images) w.Write(img);
+    }
+
+    /// <summary>Writes the PNGs for a macOS .iconset folder (turned into .icns by iconutil at build time).</summary>
+    public static void WriteIconset(string dir)
+    {
+        Directory.CreateDirectory(dir);
+        foreach (var pt in new[] { 16, 32, 128, 256, 512 })
+            foreach (var scale in new[] { 1, 2 })
+            {
+                using var b = Icon(pt * scale, mac: true);
+                b.Save(Path.Combine(dir, scale == 1 ? $"icon_{pt}x{pt}.png" : $"icon_{pt}x{pt}@2x.png"), ImageFormat.Png);
+            }
     }
 
     /// <summary>Icon-style DIB: BITMAPINFOHEADER with doubled height, bottom-up BGRA pixels, then an empty AND mask.</summary>

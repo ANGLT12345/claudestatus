@@ -1,0 +1,32 @@
+# Compiles both apps on every push and pull request, and keeps the builds as downloadable artifacts.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - run: dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageBar-windows
+          path: dist/ClaudeUsageBar.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash macos/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageBar-macOS
+          path: macos/build/ClaudeUsageBar-macOS.zip
