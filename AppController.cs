@@ -119,6 +119,11 @@ sealed class AppController : ApplicationContext
                 _vs.CliInstalled = _client.FindCli() is not null;
                 _nextPoll = now + TimeSpan.FromSeconds(10);
                 break;
+            case FetchStatus.SetupIncomplete:
+                // Needs a round trip to the provider, so check once a minute rather than every 10 s.
+                _vs.CliInstalled = _client.FindCli() is not null;
+                _nextPoll = now + TimeSpan.FromMinutes(1);
+                break;
             default:
                 _failures++;
                 _nextPoll = now + TimeSpan.FromMinutes(Math.Min(15, Math.Pow(2, Math.Min(_failures, 4))));

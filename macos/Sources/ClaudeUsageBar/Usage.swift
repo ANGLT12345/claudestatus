@@ -325,9 +325,16 @@ final class UsageClient {
                 let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 project = (root?["cloudaicompanionProject"] as? String) ?? Self.envProject
                 // "free-tier", "standard-tier"; Fmt.plan names them.
-                if let tier = (root?["currentTier"] as? [String: Any])?["id"] as? String { plan = tier }
+                let tier = (root?["currentTier"] as? [String: Any])?["id"] as? String
+                if let tier { plan = tier }
                 guard project != nil else {
-                    return FetchResult(status: .error, plan: plan, message: "Gemini isn't set up for this account")
+                    // Say why, as specifically as Google lets us (same wording as the Windows app).
+                    let reason = (root?["ineligibleTiers"] as? [[String: Any]])?
+                        .compactMap { $0["reasonMessage"] as? String }.first { !$0.isEmpty }
+                    let message = reason.map { "Google says: \($0.count > 160 ? String($0.prefix(157)) + "…" : $0)" }
+                        ?? (tier != nil ? "This account needs a Google Cloud project: set GOOGLE_CLOUD_PROJECT"
+                                        : "Gemini CLI hasn't finished setting up — run gemini and send one message")
+                    return FetchResult(status: .error, plan: plan, message: message)
                 }
             }
 

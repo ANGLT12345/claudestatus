@@ -114,7 +114,7 @@ public sealed class UsageSnapshot
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
 }
 
-public enum FetchStatus { None, Ok, NoCredentials, Unauthorized, RateLimited, Error }
+public enum FetchStatus { None, Ok, NoCredentials, Unauthorized, SetupIncomplete, RateLimited, Error }
 
 public sealed record FetchResult(FetchStatus Status, UsageSnapshot? Data, string? Plan, string? Message = null, TimeSpan? RetryAfter = null);
 
@@ -243,7 +243,7 @@ public abstract class UsageClient
         catch (TaskCanceledException) { return new(FetchStatus.Error, null, plan, "Request timed out"); }
         catch (HttpRequestException) { return new(FetchStatus.Error, null, plan, $"Can't reach {Host}"); }
         catch (JsonException) { return new(FetchStatus.Error, null, plan, "Unexpected response"); }
-        catch (SetupException e) { return new(FetchStatus.Error, null, plan, e.Message); }
+        catch (SetupException e) { return new(FetchStatus.SetupIncomplete, null, plan, e.Message); }
         catch (Exception) { return new(FetchStatus.Error, null, plan, "Couldn't update"); }
     }
 
@@ -432,6 +432,8 @@ public sealed class GeminiClient : UsageClient
                 metadata = new { ideType = "IDE_UNSPECIFIED", platform = "PLATFORM_UNSPECIFIED", pluginType = "GEMINI", duetProject = string.IsNullOrEmpty(env) ? null : env },
             }));
             if (!res.IsSuccessStatusCode) return res;
+            string? reason = null;
+            bool hasTier = false;
             using (res)
             {
                 using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
@@ -440,11 +442,34 @@ public sealed class GeminiClient : UsageClient
                     : string.IsNullOrEmpty(env) ? null : env;
                 if (root.TryGetProperty("currentTier", out var t) && t.ValueKind == JsonValueKind.Object &&
                     t.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                {
+                    hasTier = true;
                     _tier = id.GetString(); // "free-tier", "standard-tier"; Fmt.Plan names them
+                }
+                reason = IneligibleReason(root);
             }
-            if (_project is null) throw new SetupException("Gemini isn't set up for this account");
+            if (_project is null)
+            {
+                // Say why, as specifically as Google lets us: an explicit refusal, a paid tier that needs a Cloud
+                // project, or (most often) Gemini CLI never finished its first-run setup for this account.
+                throw new SetupException(
+                    reason is not null ? $"Google says: {reason}"
+                    : hasTier ? "This account needs a Google Cloud project: set GOOGLE_CLOUD_PROJECT"
+                    : "Gemini CLI hasn't finished setting up this account");
+            }
         }
         return await SendRequest(Request(token, account));
+    }
+
+    /// <summary>Google's own explanation when the account can't use a tier (e.g. age or region), if it gave one.</summary>
+    static string? IneligibleReason(JsonElement root)
+    {
+        if (!root.TryGetProperty("ineligibleTiers", out var tiers) || tiers.ValueKind != JsonValueKind.Array) return null;
+        foreach (var t in tiers.EnumerateArray())
+            if (t.ValueKind == JsonValueKind.Object && t.TryGetProperty("reasonMessage", out var m) &&
+                m.ValueKind == JsonValueKind.String && m.GetString() is { Length: > 0 } msg)
+                return msg.Length > 160 ? msg[..157] + "…" : msg;
+        return null;
     }
 
     protected override string? PlanFrom(JsonElement root) => _tier;

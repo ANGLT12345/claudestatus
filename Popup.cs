@@ -42,7 +42,7 @@ static class PopupPainter
     public const float SetupH = 212;
 
     static bool ShowBanner(ViewState vs) => vs.Status is FetchStatus.RateLimited or FetchStatus.Error;
-    public static bool NeedsSetup(ViewState vs) => vs.Status is FetchStatus.NoCredentials or FetchStatus.Unauthorized;
+    public static bool NeedsSetup(ViewState vs) => vs.Status is FetchStatus.NoCredentials or FetchStatus.Unauthorized or FetchStatus.SetupIncomplete;
     static bool ShowRows(ViewState vs) => vs.Data is not null || !NeedsSetup(vs);
     static float RowsH(ViewState vs, DateTimeOffset now) => ShowRows(vs) ? Rows(vs, now).Count * RowH + 6 : 0;
 
@@ -253,10 +253,32 @@ static class PopupPainter
         float x = card.X + 16 * s;
         using var title = Gfx.Semibold(14.5f * s);
         using var sub = Gfx.Ui(12 * s);
-        Gfx.TextMid(g, expired ? "Sign in again" : $"Connect {cliName}", title, p.Text, x, y + 24 * s);
-        Gfx.TextMid(g, expired ? $"Your {cliName} login has expired." : $"Usage comes from your {cliName} login.", sub, p.Sub, x, y + 44 * s);
+        bool incomplete = vs.Status == FetchStatus.SetupIncomplete;
+        if (incomplete)
+        {
+            // Signed in, but the provider won't report usage yet. Show its reason, wrapped to two lines.
+            Gfx.TextMid(g, $"Finish {UsageClient.Name(vs.Provider)} setup", title, p.Text, x, y + 24 * s);
+            using var fmt = (StringFormat)StringFormat.GenericTypographic.Clone();
+            fmt.Trimming = StringTrimming.EllipsisWord;
+            using var sb = new SolidBrush(p.Sub);
+            g.DrawString(vs.Message ?? "", sub, sb, new RectangleF(x, y + 35 * s, card.Right - 16 * s - x, 34 * s), fmt);
+        }
+        else
+        {
+            Gfx.TextMid(g, expired ? "Sign in again" : $"Connect {cliName}", title, p.Text, x, y + 24 * s);
+            Gfx.TextMid(g, expired ? $"Your {cliName} login has expired." : $"Usage comes from your {cliName} login.", sub, p.Sub, x, y + 44 * s);
+        }
 
-        var steps = vs.Provider == Provider.Gemini
+        var steps = incomplete
+            ? new[]
+            {
+                vs.CliInstalled
+                    ? new (string, bool)[] { ("Run ", false), ("gemini", true), (" in a terminal", false) }
+                    : new (string, bool)[] { ("Install Gemini CLI (button below)", false) },
+                new (string, bool)[] { ("Send it one message, e.g. ", false), ("hi", true) },
+                new (string, bool)[] { ("Any error it shows says what's missing", false) },
+            }
+            : vs.Provider == Provider.Gemini
             ? new[]
             {
                 vs.CliInstalled
@@ -302,7 +324,8 @@ static class PopupPainter
         var accent = p.AccentText(vs.Provider);
         for (int i = 0; i < steps.Length; i++)
         {
-            float cy = y + (76 + i * 25) * s;
+            // The two-line reason on the setup-incomplete card needs a little more room above the steps.
+            float cy = y + ((incomplete ? 84 : 76) + i * 23) * s;
             float r = 9 * s;
             using (var b = new SolidBrush(Gfx.A(brand, p.Light ? 34 : 48)))
                 g.FillEllipse(b, x, cy - r, r * 2, r * 2);
@@ -367,6 +390,7 @@ static class PopupPainter
 
         string left = vs.Fetching ? "Refreshing…"
             : vs.Data is { } d ? "Updated " + Fmt.Ago(now - d.FetchedAt)
+            : vs.Status == FetchStatus.SetupIncomplete ? "Waiting for setup to finish…"
             : NeedsSetup(vs) ? "Waiting for sign-in…"
             : "Waiting for first update";
         Gfx.TextMid(g, left, f, p.Muted, Pad * s, cy);

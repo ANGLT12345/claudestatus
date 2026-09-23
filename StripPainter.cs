@@ -85,6 +85,7 @@ static class StripPainter
             FetchStatus.RateLimited => verbose ? "Rate limited · retrying" : "Retrying",
             FetchStatus.NoCredentials => verbose ? "Click to set up" : "Set up",
             FetchStatus.Unauthorized => verbose ? "Click to sign in again" : "Sign in",
+            FetchStatus.SetupIncomplete => verbose ? "Click to finish setup" : "Set up",
             _ => verbose ? "Offline · retrying" : "Offline",
         };
     }
