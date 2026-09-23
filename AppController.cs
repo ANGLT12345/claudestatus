@@ -174,7 +174,7 @@ sealed class AppController : ApplicationContext
     }
 
     ToolStripMenuItem BuildProviderMenu() => BuildChoiceMenu("Show usage for",
-        new[] { (Provider.Claude, "Claude"), (Provider.ChatGpt, "ChatGPT") },
+        Enum.GetValues<Provider>().Select(p => (p, UsageClient.Name(p))).ToArray(),
         () => _client.Provider, SwitchProvider);
 
     ToolStripMenuItem BuildSizeMenu() => BuildChoiceMenu("Size",
@@ -214,7 +214,7 @@ sealed class AppController : ApplicationContext
     }
 
     /// <summary>
-    /// Opens a terminal to sign in (Claude Code for /login, or `codex login` for ChatGPT),
+    /// Opens a terminal to sign in (Claude Code for /login, `codex login` for ChatGPT, `gemini` for Gemini),
     /// or the CLI's install guide if it's missing.
     /// </summary>
     void OpenSetup()
@@ -225,7 +225,12 @@ sealed class AppController : ApplicationContext
         bool chatGpt = _client.Provider == Provider.ChatGpt;
         if (cli is null)
         {
-            Launch(chatGpt ? "https://developers.openai.com/codex/cli" : "https://docs.claude.com/en/docs/claude-code/setup", null);
+            Launch(_client.Provider switch
+            {
+                Provider.ChatGpt => "https://developers.openai.com/codex/cli",
+                Provider.Gemini => "https://github.com/google-gemini/gemini-cli",
+                _ => "https://docs.claude.com/en/docs/claude-code/setup",
+            }, null);
             return;
         }
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

@@ -3,11 +3,26 @@ import Security
 
 // MARK: - Model
 
-/// Whose plan usage the app shows. Picked from the right-click menu.
+/// Whose plan usage the app shows. Picked from the right-click menu; Claude is the default.
 enum Provider: String, CaseIterable {
-    case claude, chatgpt
+    case claude, chatgpt, gemini
 
-    var name: String { self == .chatgpt ? "ChatGPT" : "Claude" }
+    var name: String {
+        switch self {
+        case .claude: return "Claude"
+        case .chatgpt: return "ChatGPT"
+        case .gemini: return "Gemini"
+        }
+    }
+
+    /// The CLI whose login the usage comes from.
+    var cliName: String {
+        switch self {
+        case .claude: return "Claude Code"
+        case .chatgpt: return "Codex"
+        case .gemini: return "Gemini CLI"
+        }
+    }
 
     static var current: Provider {
         get { UserDefaults.standard.string(forKey: "provider").flatMap(Provider.init(rawValue:)) ?? .claude }
@@ -20,6 +35,8 @@ struct UsageWindow: Equatable {
     let resetsAt: Date?
     /// The window's duration (5 hours, 7 days), used for labels and the pace marker.
     var length: TimeInterval? = nil
+    /// Replaces the length-based label in the menu bar when set (Gemini's "P" and "F").
+    var label: String? = nil
 }
 
 struct ExtraUsage: Equatable {
@@ -59,8 +76,30 @@ struct UsageSnapshot: Equatable {
         )
     }
 
+    /// Gemini's quota response: a daily request bucket per model, with remainingFraction and resetTime.
+    /// The busiest Pro model goes in the session slot and the busiest Flash model in the weekly slot.
+    static func parseGemini(_ root: [String: Any], fetchedAt: Date) -> UsageSnapshot {
+        var pro: UsageWindow?, flash: UsageWindow?
+        for b in (root["buckets"] as? [[String: Any]]) ?? [] {
+            guard let left = number(b["remainingFraction"]) else { continue }
+            let model = (b["modelId"] as? String)?.lowercased() ?? ""
+            let used = min(max((1 - left) * 100, 0), 100)
+            let reset = (b["resetTime"] as? String).flatMap(parseDate)
+            if model.contains("pro"), used > (pro?.percent ?? -1) {
+                pro = UsageWindow(percent: used, resetsAt: reset, length: 86400, label: "P")
+            } else if model.contains("flash"), used > (flash?.percent ?? -1) {
+                flash = UsageWindow(percent: used, resetsAt: reset, length: 86400, label: "F")
+            }
+        }
+        return UsageSnapshot(fiveHour: pro, sevenDay: flash, fetchedAt: fetchedAt)
+    }
+
     static func parse(_ root: [String: Any], provider: Provider, fetchedAt: Date) -> UsageSnapshot {
-        provider == .chatgpt ? parseChatGPT(root, fetchedAt: fetchedAt) : parse(root, fetchedAt: fetchedAt)
+        switch provider {
+        case .claude: return parse(root, fetchedAt: fetchedAt)
+        case .chatgpt: return parseChatGPT(root, fetchedAt: fetchedAt)
+        case .gemini: return parseGemini(root, fetchedAt: fetchedAt)
+        }
     }
 
     private static func codexWindow(_ value: Any?, fetchedAt: Date) -> UsageWindow? {
@@ -186,6 +225,18 @@ enum CodexCredentials {
     }
 }
 
+/// Gemini CLI keeps its Google login in ~/.gemini/oauth_creds.json; expiry_date is in milliseconds.
+enum GeminiCredentials {
+    static func read() -> (token: String, expiry: Date?)? {
+        let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini/oauth_creds.json")
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = root["access_token"] as? String, !token.isEmpty else { return nil }
+        let expiry = (root["expiry_date"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+        return (token, expiry)
+    }
+}
+
 // MARK: - API client
 
 /// Refuses redirects so the bearer token can only ever be sent to the provider's own host.
@@ -196,7 +247,7 @@ private final class NoRedirect: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// Fetches plan usage with a CLI's own login: Claude Code's for Claude, Codex's for ChatGPT.
+/// Fetches plan usage with a CLI's own login: Claude Code's for Claude, Codex's for ChatGPT, Gemini CLI's for Gemini.
 final class UsageClient {
     let provider: Provider
     private let session: URLSession
@@ -204,12 +255,25 @@ final class UsageClient {
     private var account: String?
     private var plan: String?
     private var rejected: String?
+    /// Gemini only: the Code Assist project the quota belongs to, looked up once.
+    private var project: String?
 
-    private var endpoint: URL {
-        URL(string: provider == .chatgpt ? "https://chatgpt.com/backend-api/wham/usage" : "https://api.anthropic.com/api/oauth/usage")!
+    private static let geminiBase = "https://cloudcode-pa.googleapis.com/v1internal:"
+
+    private var host: String {
+        switch provider {
+        case .claude: return "api.anthropic.com"
+        case .chatgpt: return "chatgpt.com"
+        case .gemini: return "cloudcode-pa.googleapis.com"
+        }
     }
-    private var host: String { provider == .chatgpt ? "chatgpt.com" : "api.anthropic.com" }
-    private var company: String { provider == .chatgpt ? "OpenAI" : "Anthropic" }
+    private var company: String {
+        switch provider {
+        case .claude: return "Anthropic"
+        case .chatgpt: return "OpenAI"
+        case .gemini: return "Google"
+        }
+    }
 
     init(provider: Provider) {
         self.provider = provider
@@ -224,12 +288,21 @@ final class UsageClient {
     func reset() { token = nil }
 
     func fetch() async -> FetchResult {
-        if provider == .chatgpt {
+        switch provider {
+        case .chatgpt:
             // Codex's login is a plain file, so it's re-read every time and a new login is picked up straight away.
             let creds = CodexCredentials.read()
             token = creds?.token
             account = creds?.account
-        } else if token == nil || token == rejected {
+        case .gemini:
+            // Gemini CLI's token only lasts about an hour and only Gemini CLI renews it; don't send an expired one.
+            let creds = GeminiCredentials.read()
+            token = creds?.token
+            if let expiry = creds?.expiry, expiry < Date().addingTimeInterval(60), token != nil {
+                return FetchResult(status: .unauthorized, plan: plan, message: "Login expired")
+            }
+        case .claude:
+            guard token == nil || token == rejected else { break }
             // The token is kept in memory so the Keychain is only read at start-up and after a rejection.
             switch Credentials.read() {
             case .found(let t, let p): token = t; plan = p
@@ -245,39 +318,29 @@ final class UsageClient {
             return FetchResult(status: .unauthorized, plan: plan, message: "Login expired")
         }
 
-        var req = URLRequest(url: endpoint)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if provider == .chatgpt {
-            if let account, !account.isEmpty { req.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id") }
-        } else {
-            req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        }
-        req.setValue("ClaudeUsageBar-macOS/1.0", forHTTPHeaderField: "User-Agent")
-
         do {
-            let (data, response) = try await session.data(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                return FetchResult(status: .error, plan: plan, message: "Couldn't update")
-            }
-            switch http.statusCode {
-            case 200..<300:
-                guard data.count < 256 * 1024,
-                      let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    return FetchResult(status: .error, plan: plan, message: "Unexpected response")
+            if provider == .gemini && project == nil {
+                let (data, http) = try await send(geminiRequest("loadCodeAssist", token: token, body: loadCodeAssistBody()))
+                guard (200..<300).contains(http.statusCode) else { return failure(http, token: token) }
+                let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                project = (root?["cloudaicompanionProject"] as? String) ?? Self.envProject
+                // "free-tier", "standard-tier"; Fmt.plan names them.
+                if let tier = (root?["currentTier"] as? [String: Any])?["id"] as? String { plan = tier }
+                guard project != nil else {
+                    return FetchResult(status: .error, plan: plan, message: "Gemini isn't set up for this account")
                 }
-                let now = Date()
-                if let p = root["plan_type"] as? String, !p.isEmpty { plan = p }
-                Cache.save(raw: root, plan: plan, at: now, provider: provider)
-                return FetchResult(status: .ok, data: UsageSnapshot.parse(root, provider: provider, fetchedAt: now), plan: plan)
-            case 429:
-                let wait = http.value(forHTTPHeaderField: "Retry-After").flatMap { TimeInterval($0) }
-                return FetchResult(status: .rateLimited, plan: plan, message: "Rate limited by \(company)", retryAfter: wait)
-            case 401, 403:
-                rejected = token
-                return FetchResult(status: .unauthorized, plan: plan, message: "Login expired")
-            default:
-                return FetchResult(status: .error, plan: plan, message: "Server error (\(http.statusCode))")
             }
+
+            let (data, http) = try await send(request(token: token))
+            guard (200..<300).contains(http.statusCode) else { return failure(http, token: token) }
+            guard data.count < 256 * 1024,
+                  let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return FetchResult(status: .error, plan: plan, message: "Unexpected response")
+            }
+            let now = Date()
+            if let p = root["plan_type"] as? String, !p.isEmpty { plan = p }
+            Cache.save(raw: root, plan: plan, at: now, provider: provider)
+            return FetchResult(status: .ok, data: UsageSnapshot.parse(root, provider: provider, fetchedAt: now), plan: plan)
         } catch let e as URLError where e.code == .timedOut {
             return FetchResult(status: .error, plan: plan, message: "Request timed out")
         } catch is URLError {
@@ -285,6 +348,65 @@ final class UsageClient {
         } catch {
             return FetchResult(status: .error, plan: plan, message: "Couldn't update")
         }
+    }
+
+    private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var req = req
+        req.setValue("ClaudeUsageBar-macOS/1.0", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return (data, http)
+    }
+
+    private func failure(_ http: HTTPURLResponse, token: String) -> FetchResult {
+        switch http.statusCode {
+        case 429:
+            let wait = http.value(forHTTPHeaderField: "Retry-After").flatMap { TimeInterval($0) }
+            return FetchResult(status: .rateLimited, plan: plan, message: "Rate limited by \(company)", retryAfter: wait)
+        case 401, 403:
+            rejected = token
+            return FetchResult(status: .unauthorized, plan: plan, message: "Login expired")
+        default:
+            return FetchResult(status: .error, plan: plan, message: "Server error (\(http.statusCode))")
+        }
+    }
+
+    private func request(token: String) -> URLRequest {
+        switch provider {
+        case .gemini:
+            return geminiRequest("retrieveUserQuota", token: token, body: ["project": project ?? ""])
+        case .chatgpt:
+            var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            if let account, !account.isEmpty { req.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id") }
+            return req
+        case .claude:
+            var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+            return req
+        }
+    }
+
+    private static var envProject: String? {
+        ProcessInfo.processInfo.environment["GOOGLE_CLOUD_PROJECT"].flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private func loadCodeAssistBody() -> [String: Any] {
+        var metadata: [String: Any] = ["ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"]
+        var body: [String: Any] = [:]
+        if let p = Self.envProject { body["cloudaicompanionProject"] = p; metadata["duetProject"] = p }
+        body["metadata"] = metadata
+        return body
+    }
+
+    private func geminiRequest(_ method: String, token: String, body: [String: Any]) -> URLRequest {
+        var req = URLRequest(url: URL(string: Self.geminiBase + method)!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return req
     }
 }
 
@@ -294,7 +416,11 @@ enum Cache {
     static func url(_ provider: Provider) -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ClaudeUsageBar", isDirectory: true)
-        return dir.appendingPathComponent(provider == .chatgpt ? "last-chatgpt.json" : "last.json")
+        switch provider {
+        case .claude: return dir.appendingPathComponent("last.json")
+        case .chatgpt: return dir.appendingPathComponent("last-chatgpt.json")
+        case .gemini: return dir.appendingPathComponent("last-gemini.json")
+        }
     }
 
     static func save(raw: [String: Any], plan: String?, at: Date, provider: Provider) {
@@ -365,6 +491,9 @@ enum Fmt {
         case nil, "": return ""
         case "pro": return "Pro"
         case "plus": return "Plus"
+        case "free-tier": return "Free"
+        case "standard-tier": return "Standard"
+        case "legacy-tier": return "Legacy"
         case "max": return "Max"
         case "team": return "Team"
         case "enterprise": return "Enterprise"
@@ -374,6 +503,7 @@ enum Fmt {
 
     /// Short menu bar label for a window: "5h", "7d". Falls back when the length is unknown.
     static func label(_ w: UsageWindow?, fallback: String) -> String {
+        if let label = w?.label { return label }
         guard let l = w?.length else { return fallback }
         if l >= 86400 { return "\(Int((l / 86400).rounded()))d" }
         if l >= 3600 { return "\(Int((l / 3600).rounded()))h" }
