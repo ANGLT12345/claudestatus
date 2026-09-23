@@ -51,7 +51,7 @@ static class StripPainter
             // No numbers yet: say why instead of showing empty meters.
             using var small = Gfx.Ui(11 * s);
             float x = (variant == StripSize.Full ? 10 : 7) * s;
-            string name = UsageClient.Name(vs.Provider);
+            string name = vs.Provider == Provider.ChatGpt ? "ChatGPT" : "Claude";
             Gfx.TextMid(g, variant == StripSize.Full ? name + " usage" : name, label, fg, x, cy - rowGap);
             Gfx.TextMid(g, Status(vs, now, variant == StripSize.Full), small, Gfx.A(fg, 150), x, cy + rowGap);
             return;
@@ -85,7 +85,6 @@ static class StripPainter
             FetchStatus.RateLimited => verbose ? "Rate limited · retrying" : "Retrying",
             FetchStatus.NoCredentials => verbose ? "Click to set up" : "Set up",
             FetchStatus.Unauthorized => verbose ? "Click to sign in again" : "Sign in",
-            FetchStatus.SetupIncomplete => verbose ? "Click to finish setup" : "Set up",
             _ => verbose ? "Offline · retrying" : "Offline",
         };
     }

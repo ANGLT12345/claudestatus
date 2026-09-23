@@ -119,11 +119,6 @@ sealed class AppController : ApplicationContext
                 _vs.CliInstalled = _client.FindCli() is not null;
                 _nextPoll = now + TimeSpan.FromSeconds(10);
                 break;
-            case FetchStatus.SetupIncomplete:
-                // Needs a round trip to the provider, so check once a minute rather than every 10 s.
-                _vs.CliInstalled = _client.FindCli() is not null;
-                _nextPoll = now + TimeSpan.FromMinutes(1);
-                break;
             default:
                 _failures++;
                 _nextPoll = now + TimeSpan.FromMinutes(Math.Min(15, Math.Pow(2, Math.Min(_failures, 4))));
@@ -179,7 +174,7 @@ sealed class AppController : ApplicationContext
     }
 
     ToolStripMenuItem BuildProviderMenu() => BuildChoiceMenu("Show usage for",
-        Enum.GetValues<Provider>().Select(p => (p, UsageClient.Name(p))).ToArray(),
+        new[] { (Provider.Claude, "Claude"), (Provider.ChatGpt, "ChatGPT") },
         () => _client.Provider, SwitchProvider);
 
     ToolStripMenuItem BuildSizeMenu() => BuildChoiceMenu("Size",
@@ -219,7 +214,7 @@ sealed class AppController : ApplicationContext
     }
 
     /// <summary>
-    /// Opens a terminal to sign in (Claude Code for /login, `codex login` for ChatGPT, `gemini` for Gemini),
+    /// Opens a terminal to sign in (Claude Code for /login, or `codex login` for ChatGPT),
     /// or the CLI's install guide if it's missing.
     /// </summary>
     void OpenSetup()
@@ -230,12 +225,7 @@ sealed class AppController : ApplicationContext
         bool chatGpt = _client.Provider == Provider.ChatGpt;
         if (cli is null)
         {
-            Launch(_client.Provider switch
-            {
-                Provider.ChatGpt => "https://developers.openai.com/codex/cli",
-                Provider.Gemini => "https://github.com/google-gemini/gemini-cli",
-                _ => "https://docs.claude.com/en/docs/claude-code/setup",
-            }, null);
+            Launch(chatGpt ? "https://developers.openai.com/codex/cli" : "https://docs.claude.com/en/docs/claude-code/setup", null);
             return;
         }
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

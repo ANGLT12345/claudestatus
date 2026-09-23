@@ -31,16 +31,6 @@ static class Preview
             Data = new UsageSnapshot { FiveHour = new(93, now.AddMinutes(42)), SevenDay = new(58, now.AddDays(4)), FetchedAt = now.AddMinutes(-11) },
         };
         var setup = new ViewState { Plan = "pro", Status = FetchStatus.NoCredentials, CliInstalled = true };
-        var geminiSetup = new ViewState
-        {
-            Provider = Provider.Gemini, Status = FetchStatus.SetupIncomplete, CliInstalled = true,
-            Message = "Gemini CLI hasn't finished setting up this account",
-        };
-        var geminiRefused = new ViewState
-        {
-            Provider = Provider.Gemini, Status = FetchStatus.SetupIncomplete, CliInstalled = true,
-            Message = "Google says: This service is not available for users under the age of 18 in your region.",
-        };
 
         using (var icon = Icon(256)) icon.Save(Path.Combine(dir, "icon.png"), ImageFormat.Png);
 
@@ -49,12 +39,6 @@ static class Preview
         Popup(sample, Palette.LightTheme, s, Path.Combine(dir, "popup-light.png"));
         Popup(limited, Palette.Dark, s, Path.Combine(dir, "popup-limited.png"));
         Popup(setup, Palette.Dark, s, Path.Combine(dir, "popup-setup.png"));
-        if (dir.Contains("scratch", StringComparison.OrdinalIgnoreCase))
-        {
-            // Dev-only previews; not README images.
-            Popup(geminiSetup, Palette.Dark, s, Path.Combine(dir, "popup-gemini-setup.png"));
-            Popup(geminiRefused, Palette.Dark, s, Path.Combine(dir, "popup-gemini-refused.png"));
-        }
         Strips(sample, false, s, Path.Combine(dir, "strip-sizes-dark.png"));
         Strips(sample, true, s, Path.Combine(dir, "strip-sizes-light.png"));
         Strips(setup, false, s, Path.Combine(dir, "strip-setup.png"));

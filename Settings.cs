@@ -62,7 +62,8 @@ static class Settings
             try
             {
                 using var k = Registry.CurrentUser.OpenSubKey(Key);
-                return Enum.TryParse<Provider>(k?.GetValue("Provider") as string, out var v) ? v : Provider.Claude;
+                // A provider that's since been removed (e.g. "Gemini") or a stray number falls back to Claude.
+                return Enum.TryParse<Provider>(k?.GetValue("Provider") as string, out var v) && Enum.IsDefined(v) ? v : Provider.Claude;
             }
             catch { return Provider.Claude; }
         }

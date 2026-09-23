@@ -15,12 +15,6 @@ static class PopupPainter
     {
         var d = vs.Data;
         bool chatGpt = vs.Provider == Provider.ChatGpt;
-        if (vs.Provider == Provider.Gemini)
-            return new List<RowModel>
-            {
-                Window(RowKind.Opus, "Pro models", "Daily requests", d?.FiveHour, TimeSpan.FromDays(1), now),
-                Window(RowKind.Sonnet, "Flash models", "Daily requests", d?.SevenDay, TimeSpan.FromDays(1), now),
-            };
         var rows = new List<RowModel>
         {
             Window(RowKind.Session, "Session", Fmt.Describe(d?.FiveHour?.Length ?? Fmt.FiveHours, ""), d?.FiveHour, Fmt.FiveHours, now),
@@ -42,7 +36,7 @@ static class PopupPainter
     public const float SetupH = 212;
 
     static bool ShowBanner(ViewState vs) => vs.Status is FetchStatus.RateLimited or FetchStatus.Error;
-    public static bool NeedsSetup(ViewState vs) => vs.Status is FetchStatus.NoCredentials or FetchStatus.Unauthorized or FetchStatus.SetupIncomplete;
+    public static bool NeedsSetup(ViewState vs) => vs.Status is FetchStatus.NoCredentials or FetchStatus.Unauthorized;
     static bool ShowRows(ViewState vs) => vs.Data is not null || !NeedsSetup(vs);
     static float RowsH(ViewState vs, DateTimeOffset now) => ShowRows(vs) ? Rows(vs, now).Count * RowH + 6 : 0;
 
@@ -100,7 +94,7 @@ static class PopupPainter
         float cy = 31 * s;
         using var title = Gfx.Display(17 * s, FontStyle.Bold);
         float tx = Pad * s;
-        string name = UsageClient.Name(vs.Provider);
+        string name = vs.Provider == Provider.ChatGpt ? "ChatGPT" : "Claude";
         Gfx.TextMid(g, name, title, p.Text, tx, cy);
         float tw = Gfx.Measure(g, name, title).Width;
 
@@ -238,12 +232,12 @@ static class PopupPainter
         g.FillPath(b, path);
     }
 
-    /// <summary>Walks the user through signing in to Claude Code (Codex for ChatGPT, Gemini CLI for Gemini), which is where the usage token comes from.</summary>
+    /// <summary>Walks the user through signing in to Claude Code (or Codex, for ChatGPT), which is where the usage token comes from.</summary>
     static void Setup(Graphics g, float s, Palette p, ViewState vs, float y, RectangleF button, bool hover)
     {
         bool expired = vs.Status == FetchStatus.Unauthorized;
         bool chatGpt = vs.Provider == Provider.ChatGpt;
-        string cliName = UsageClient.CliName(vs.Provider);
+        string cliName = chatGpt ? "Codex" : "Claude Code";
         var card = new RectangleF(Pad * s, y, (W - Pad * 2) * s, (SetupH - 12) * s);
         Gfx.FillRound(g, Gfx.Mix(p.BgTop, p.Text, p.Light ? 0.03f : 0.035f), card, 12 * s);
         using (var pen = new Pen(p.Divider, Math.Max(1, s)))
@@ -253,43 +247,10 @@ static class PopupPainter
         float x = card.X + 16 * s;
         using var title = Gfx.Semibold(14.5f * s);
         using var sub = Gfx.Ui(12 * s);
-        bool incomplete = vs.Status == FetchStatus.SetupIncomplete;
-        if (incomplete)
-        {
-            // Signed in, but the provider won't report usage yet. Show its reason, wrapped to two lines.
-            Gfx.TextMid(g, $"Finish {UsageClient.Name(vs.Provider)} setup", title, p.Text, x, y + 24 * s);
-            using var fmt = (StringFormat)StringFormat.GenericTypographic.Clone();
-            fmt.Trimming = StringTrimming.EllipsisWord;
-            using var sb = new SolidBrush(p.Sub);
-            g.DrawString(vs.Message ?? "", sub, sb, new RectangleF(x, y + 35 * s, card.Right - 16 * s - x, 34 * s), fmt);
-        }
-        else
-        {
-            Gfx.TextMid(g, expired ? "Sign in again" : $"Connect {cliName}", title, p.Text, x, y + 24 * s);
-            Gfx.TextMid(g, expired ? $"Your {cliName} login has expired." : $"Usage comes from your {cliName} login.", sub, p.Sub, x, y + 44 * s);
-        }
+        Gfx.TextMid(g, expired ? "Sign in again" : $"Connect {cliName}", title, p.Text, x, y + 24 * s);
+        Gfx.TextMid(g, expired ? $"Your {cliName} login has expired." : $"Usage comes from your {cliName} login.", sub, p.Sub, x, y + 44 * s);
 
-        var steps = incomplete
-            ? new[]
-            {
-                vs.CliInstalled
-                    ? new (string, bool)[] { ("Run ", false), ("gemini", true), (" in a terminal", false) }
-                    : new (string, bool)[] { ("Install Gemini CLI (button below)", false) },
-                new (string, bool)[] { ("Send it one message, e.g. ", false), ("hi", true) },
-                new (string, bool)[] { ("Any error it shows says what's missing", false) },
-            }
-            : vs.Provider == Provider.Gemini
-            ? new[]
-            {
-                vs.CliInstalled
-                    ? new (string, bool)[] { ("Run ", false), ("gemini", true), (" in a terminal", false) }
-                    : new (string, bool)[] { ("Install Gemini CLI (button below)", false) },
-                expired
-                    ? new (string, bool)[] { ("That renews the login automatically", false) }
-                    : new (string, bool)[] { ("Choose ", false), ("Login with Google", false) },
-                new (string, bool)[] { (expired ? "Keep it open a moment — this updates itself" : "Finish in the browser — this updates itself", false) },
-            }
-            : chatGpt
+        var steps = chatGpt
             ? vs.CliInstalled
                 ? new[]
                 {
@@ -324,8 +285,7 @@ static class PopupPainter
         var accent = p.AccentText(vs.Provider);
         for (int i = 0; i < steps.Length; i++)
         {
-            // The two-line reason on the setup-incomplete card needs a little more room above the steps.
-            float cy = y + ((incomplete ? 84 : 76) + i * 23) * s;
+            float cy = y + (76 + i * 25) * s;
             float r = 9 * s;
             using (var b = new SolidBrush(Gfx.A(brand, p.Light ? 34 : 48)))
                 g.FillEllipse(b, x, cy - r, r * 2, r * 2);
@@ -390,7 +350,6 @@ static class PopupPainter
 
         string left = vs.Fetching ? "Refreshing…"
             : vs.Data is { } d ? "Updated " + Fmt.Ago(now - d.FetchedAt)
-            : vs.Status == FetchStatus.SetupIncomplete ? "Waiting for setup to finish…"
             : NeedsSetup(vs) ? "Waiting for sign-in…"
             : "Waiting for first update";
         Gfx.TextMid(g, left, f, p.Muted, Pad * s, cy);

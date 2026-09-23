@@ -268,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Setup
 
-    /// Opens Terminal to sign in (Claude Code for /login, `codex login` for ChatGPT, `gemini` for Gemini),
+    /// Opens Terminal to sign in (Claude Code for /login, or `codex login` for ChatGPT),
     /// retries the Keychain, or opens the CLI's install guide.
     private func openSetup() {
         popover.performClose(nil)
@@ -277,33 +277,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             refresh(manual: false)
             return
         }
+        let chatgpt = client.provider == .chatgpt
         guard let cli = CLI.path(for: client.provider) else {
             model.cliInstalled = false
-            let guide: String
-            switch client.provider {
-            case .claude: guide = "https://docs.claude.com/en/docs/claude-code/setup"
-            case .chatgpt: guide = "https://developers.openai.com/codex/cli"
-            case .gemini: guide = "https://github.com/google-gemini/gemini-cli"
-            }
-            NSWorkspace.shared.open(URL(string: guide)!)
+            NSWorkspace.shared.open(URL(string: chatgpt ? "https://developers.openai.com/codex/cli"
+                                                        : "https://docs.claude.com/en/docs/claude-code/setup")!)
             return
         }
-        CLI.openInTerminal(cli, arguments: client.provider == .chatgpt ? ["login"] : [])
+        CLI.openInTerminal(cli, arguments: chatgpt ? ["login"] : [])
     }
 }
 
 // MARK: - Helpers
 
 enum CLI {
-    /// Common install locations of Claude Code, Codex or Gemini CLI; GUI apps don't inherit the shell's PATH, so we look directly.
+    /// Common install locations of Claude Code or Codex; GUI apps don't inherit the shell's PATH, so we look directly.
     static func path(for provider: Provider) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let name: String
-        switch provider {
-        case .claude: name = "claude"
-        case .chatgpt: name = "codex"
-        case .gemini: name = "gemini"
-        }
+        let name = provider == .chatgpt ? "codex" : "claude"
         var candidates = [
             "\(home)/.local/bin/\(name)",
             "/opt/homebrew/bin/\(name)",
