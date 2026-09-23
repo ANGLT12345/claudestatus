@@ -95,6 +95,7 @@ On a centred taskbar it prefers the empty space left of your apps, next to Widge
   (Get-FileHash .\ClaudeUsageBar.exe -Algorithm SHA256).Hash
   ```
 - Found a security problem? Please see [SECURITY.md](SECURITY.md).
+- Full details: [Privacy statement](PRIVACY.md).
 
 ## How it works
 
