@@ -1,0 +1,38 @@
+# Builds ClaudeUsageBar.exe on GitHub's runners when a version tag (e.g. v1.0.0) is pushed,
+# and attaches it plus a SHA-256 checksum to a GitHub Release. Building in CI means the
+# released binary provably comes from the tagged source.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish
+        run: dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -o dist
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/ClaudeUsageBar.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  ClaudeUsageBar.exe" | Out-File -Encoding ascii dist/ClaudeUsageBar.exe.sha256
+          Get-Content dist/ClaudeUsageBar.exe.sha256
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ClaudeUsageBar.exe
+            dist/ClaudeUsageBar.exe.sha256
+          generate_release_notes: true
